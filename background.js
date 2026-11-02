@@ -1,7 +1,9 @@
 import { contentIdFromUrl, probeNotFound } from './common.js';
 
-const DEFAULTS = { autoNotFound: true, autoDedupe: true };
+// retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
+const DEFAULTS = { autoNotFound: true, autoDedupe: true, retentionDays: 7 };
 const LOG_MAX = 50;
+const DAY = 86_400_000;
 
 const getSettings = () => chrome.storage.sync.get(DEFAULTS);
 const tabUrl = (t) => t.pendingUrl || t.url || '';
@@ -10,10 +12,20 @@ const tabUrl = (t) => t.pendingUrl || t.url || '';
 let queue = Promise.resolve();
 const enqueue = (fn) => (queue = queue.then(fn, fn).catch((e) => console.warn(e)));
 
+// 保存期間を過ぎた履歴を取り除く
+const withinRetention = (log, days) =>
+  days > 0 ? log.filter((e) => e.at >= Date.now() - days * DAY) : log;
+
 async function addLog(entry) {
-  const { log = [] } = await chrome.storage.local.get('log');
+  const [{ log = [] }, { retentionDays }] = await Promise.all([chrome.storage.local.get('log'), getSettings()]);
   log.unshift(entry);
-  await chrome.storage.local.set({ log: log.slice(0, LOG_MAX) });
+  await chrome.storage.local.set({ log: withinRetention(log, retentionDays).slice(0, LOG_MAX) });
+}
+
+async function pruneLog() {
+  const [{ log = [] }, { retentionDays }] = await Promise.all([chrome.storage.local.get('log'), getSettings()]);
+  const kept = withinRetention(log, retentionDays);
+  if (kept.length !== log.length) await chrome.storage.local.set({ log: kept });
 }
 
 async function closeTab(tab, reason) {
@@ -186,6 +198,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     getStatus().then(sendResponse);
     return true;
   }
+});
+
+// 期限切れ履歴の削除：1時間ごと、ブラウザ起動時、保存期間を変えた時
+const PRUNE_ALARM = 'pruneLog';
+const ensureAlarm = () => chrome.alarms.create(PRUNE_ALARM, { periodInMinutes: 60 });
+chrome.runtime.onInstalled.addListener(() => { ensureAlarm(); enqueue(pruneLog); });
+chrome.runtime.onStartup.addListener(() => { ensureAlarm(); enqueue(pruneLog); });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === PRUNE_ALARM) enqueue(pruneLog); });
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes.retentionDays) enqueue(pruneLog);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {

@@ -1,11 +1,19 @@
 import { contentIdFromUrl } from './common.js';
 
-const DEFAULTS = { autoNotFound: true, autoDedupe: true };
+const DEFAULTS = { autoNotFound: true, autoDedupe: true, retentionDays: 7 };
+const SWITCHES = ['autoNotFound', 'autoDedupe'];
+const DAY = 86_400_000;
 const REASON = { notFound: '不存在', duplicate: '重複' };
 const $ = (id) => document.getElementById(id);
 
 let filter = 'all';
 let log = [];
+let retentionDays = DEFAULTS.retentionDays;
+
+// 削除処理（1時間ごと）を待たずに、期限切れは表示から外す
+const setLog = (entries) => {
+  log = retentionDays > 0 ? entries.filter((e) => e.at >= Date.now() - retentionDays * DAY) : entries;
+};
 
 // ---- 時刻表示 ----
 function relTime(at) {
@@ -146,13 +154,22 @@ async function reopen(entries, focus) {
 // ---- 初期化 ----
 async function init() {
   const s = await chrome.storage.sync.get(DEFAULTS);
-  for (const key of Object.keys(DEFAULTS)) {
+  for (const key of SWITCHES) {
     $(key).checked = s[key];
     $(key).addEventListener('change', (e) => chrome.storage.sync.set({ [key]: e.target.checked }));
   }
+  retentionDays = Number(s.retentionDays);
+  $('retentionDays').value = String(retentionDays);
+  $('retentionDays').addEventListener('change', async (e) => {
+    retentionDays = Number(e.target.value);
+    await chrome.storage.sync.set({ retentionDays }); // background が期限切れを削除する
+    const d = await chrome.storage.local.get('log');
+    setLog(d.log || []);
+    renderLog();
+  });
 
   const data = await chrome.storage.local.get(['log', 'lastScan']);
-  log = data.log || [];
+  setLog(data.log || []);
   renderLog();
   showResult(data.lastScan);
   refreshStatus();
@@ -160,7 +177,7 @@ async function init() {
   // 自動クローズや整理で履歴が変わったら表示を更新
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.log) { log = changes.log.newValue || []; renderLog(); refreshStatus(); }
+    if (changes.log) { setLog(changes.log.newValue || []); renderLog(); refreshStatus(); }
     if (changes.lastScan) showResult(changes.lastScan.newValue);
   });
 
@@ -169,7 +186,7 @@ async function init() {
   });
 
   // 「○分前」の表示を更新
-  setInterval(() => { renderLog(); chrome.storage.local.get('lastScan').then((d) => showResult(d.lastScan)); }, 30_000);
+  setInterval(() => { setLog(log); renderLog(); chrome.storage.local.get('lastScan').then((d) => showResult(d.lastScan)); }, 30_000);
 }
 
 document.querySelectorAll('.chip').forEach((chip) => {
