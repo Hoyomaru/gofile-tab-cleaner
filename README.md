@@ -13,12 +13,19 @@ Gofile のコンテンツタブ（`https://gofile.io/d/<contentId>`）を整理�
 
 Chrome ウェブストアには公開していないので、手動で読み込みます（Chrome / Edge / Brave など Chromium 系ブラウザで動作）。
 
-1. このリポジトリをダウンロード（緑の「Code」→「Download ZIP」）して展開する
+1. [Releases](https://github.com/Hoyomaru/gofile-tab-cleaner/releases/latest) から `gofile-tab-cleaner-v<バージョン>.zip` をダウンロードして展開する
 2. Chrome で `chrome://extensions` を開く
 3. 右上の「デベロッパー モード」をオンにする
-4. 「パッケージ化されていない拡張機能を読み込む」で、展開したフォルダ（`manifest.json` があるフォルダ）を選ぶ
+4. 「パッケージ化されていない拡張機能を読み込む」で、展開してできた `gofile-tab-cleaner` フォルダを選ぶ
 
-更新する時は、新しいファイルに置き換えてから `chrome://extensions` で再読み込み（↻）してください。
+展開したフォルダは削除・移動しないでください（拡張機能はそのフォルダから読み込まれます）。
+
+### 更新
+
+1. 新しいバージョンの ZIP を展開し、前のフォルダの中身を置き換える
+2. `chrome://extensions` でこの拡張機能の再読み込み（↻）を押す
+
+設定と履歴はそのまま引き継がれます。新しいバージョンの通知を受け取るには、リポジトリの「Watch → Custom → Releases」を設定してください。
 
 ## 使い方
 
@@ -66,6 +73,7 @@ URL の `/d/` の後ろ（contentId）が同じタブを重複とみなします
 ## 開発メモ
 
 - アイコンは `pwsh tools/make-icons.ps1` で `icons/` に再生成できます（Windows）
+- リリース用 ZIP は `pwsh tools/make-release.ps1` で `dist/` に作れます（バージョンは `manifest.json` から取得）
 - Gofile の画面の文言が変わると不存在判定が動かなくなります。その場合は `common.js` と `content.js` の判定条件を合わせて直してください
 
 ## ライセンス
