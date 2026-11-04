@@ -1,6 +1,9 @@
 // Gofile の /d/<id> ページで「不存在」表示を検出し、background に知らせる。
-// 判定条件は common.js の probeNotFound と同じ。
+// 「Too many requests」ページなら、background が決めた時間だけ待って再読み込みする。
+// 判定条件は common.js の probePage と同じ。
 (() => {
+  const isTooMany = () => /^too many requests\.?$/i.test((document.body?.innerText || '').trim());
+
   const isNotFound = () =>
     /^Content not found\b/.test(document.title) &&
     [...document.querySelectorAll('main h1')]
@@ -11,6 +14,28 @@
     return m ? m[1] : null;
   };
 
+  // ---- Too many requests：時間をおいて再読み込み ----
+  if (isTooMany()) {
+    const id = currentId();
+    chrome.runtime.sendMessage({ type: 'tooMany', contentId: id }).then((r) => {
+      if (!r || r.off) return;
+      if (r.delay == null) {
+        document.title = `✕ 再試行を中止 (${r.max}回) · ${id}`;
+        return;
+      }
+      const due = Date.now() + r.delay;
+      const showTitle = () => {
+        const s = Math.max(0, Math.ceil((due - Date.now()) / 1000));
+        document.title = `⏳ ${s}秒後に再試行 (${r.attempt}/${r.max}) · ${id}`;
+      };
+      showTitle();
+      setInterval(showTitle, 1000);
+      setTimeout(() => location.reload(), r.delay);
+    }).catch(() => {});
+    return;
+  }
+
+  // ---- 不存在の検出 ----
   let reportedFor = null; // 報告済みの contentId（同じ id で二重送信しない）
   let timer = null;
 

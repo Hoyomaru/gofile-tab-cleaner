@@ -1,7 +1,7 @@
 import { contentIdFromUrl } from './common.js';
 
-const DEFAULTS = { autoNotFound: true, autoDedupe: true, retentionDays: 7 };
-const SWITCHES = ['autoNotFound', 'autoDedupe'];
+const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
+const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry'];
 const DAY = 86_400_000;
 const REASON = { notFound: '不存在', duplicate: '重複' };
 const $ = (id) => document.getElementById(id);
@@ -124,32 +124,10 @@ function renderLog() {
 
 const visibleEntries = () => (filter === 'all' ? log : log.filter((e) => e.reason === filter));
 
-// 開き直す。同じ contentId のタブが既に開いていれば新しく開かずそこを使う。
-async function reopen(entries, focus) {
-  const tabs = await chrome.tabs.query({});
-  const openIds = new Map();
-  for (const t of tabs) {
-    const id = contentIdFromUrl(t.pendingUrl || t.url);
-    if (id && !openIds.has(id)) openIds.set(id, t);
-  }
-  const done = new Set();
-  for (const e of entries) {
-    const id = e.contentId || contentIdFromUrl(e.url);
-    const existing = id && openIds.get(id);
-    if (existing) {
-      if (focus) {
-        await chrome.tabs.update(existing.id, { active: true });
-        await chrome.windows.update(existing.windowId, { focused: true });
-      }
-    } else if (!done.has(id || e.url)) {
-      await chrome.tabs.create({ url: e.url, active: focus });
-    }
-    done.add(id || e.url);
-  }
-  // 開き直した分は履歴から外す
-  const removed = new Set(entries);
-  await chrome.storage.local.set({ log: log.filter((e) => !removed.has(e)) });
-}
+// 開き直す。実際の処理は background が行う（まとめて開く時は間隔をあけるので、
+// ポップアップを閉じても最後まで開けるように）。
+const reopen = (entries, focus) =>
+  chrome.runtime.sendMessage({ type: 'reopen', entries, focus }).catch(() => {});
 
 // ---- 初期化 ----
 async function init() {

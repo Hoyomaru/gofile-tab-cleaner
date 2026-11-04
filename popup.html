@@ -33,6 +33,13 @@
     </label>
     <label class="row">
       <span class="text">
+        <span class="title">Too many requests を自動で再読み込み</span>
+        <span class="desc">間隔をあけて最大5回まで再試行します（タブは閉じません）</span>
+      </span>
+      <input type="checkbox" class="switch" id="autoRetry">
+    </label>
+    <label class="row">
+      <span class="text">
         <span class="title">履歴の保存期間</span>
         <span class="desc">期間を過ぎた「最近閉じたタブ」を自動で消します</span>
       </span>
@@ -59,7 +66,7 @@
     <div class="history-head">
       <h2>最近閉じたタブ</h2>
       <div class="actions">
-        <button id="reopenAll" class="ghost" title="表示中の履歴をすべて開き直す">すべて開く</button>
+        <button id="reopenAll" class="ghost" title="表示中の履歴をすべて開き直す（混雑を避けるため少しずつ開きます）">すべて開く</button>
         <button id="clear" class="ghost" title="履歴を消去">クリア</button>
       </div>
     </div>

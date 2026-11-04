@@ -1,7 +1,7 @@
-import { contentIdFromUrl, probeNotFound } from './common.js';
+import { contentIdFromUrl, probePage } from './common.js';
 
 // retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
-const DEFAULTS = { autoNotFound: true, autoDedupe: true, retentionDays: 7 };
+const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
 const LOG_MAX = 50;
 const DAY = 86_400_000;
 
@@ -81,8 +81,79 @@ async function handleNotFound(tabId, contentId) {
   await closeTab(tab, 'notFound');
 }
 
-// ---- 手動一括処理 ----
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- Too many requests の再試行（content.js からの問い合わせ）----
+// 待ち時間は 10秒 → 20秒 → 40秒… と倍にしていく（±20% ばらつかせる）。
+// さらに全タブで再読み込みの時刻を RETRY_GAP ずつずらし、一斉に再アクセスしないようにする。
+// 実際の待機と再読み込みはタブ側（content.js）で行う（service worker は止まることがあるため）。
+const RETRY_MAX = 5;
+const RETRY_BASE = 10_000;
+const RETRY_GAP = 2_000;
+const RETRY_RESET = 10 * 60_000; // 最後の再試行からこれだけ経ったら回数を数え直す
+
+async function handleTooMany(tabId) {
+  const { autoRetry } = await getSettings();
+  if (!autoRetry) return { off: true };
+  const { retry = {}, nextSlot = 0 } = await chrome.storage.session.get(['retry', 'nextSlot']);
+  const now = Date.now();
+  const prev = retry[tabId];
+  const attempt = prev && now - prev.at < RETRY_RESET ? prev.attempt + 1 : 1;
+  if (attempt > RETRY_MAX) return { delay: null, max: RETRY_MAX }; // あきらめる（タブは閉じない）
+  const backoff = RETRY_BASE * 2 ** (attempt - 1) * (0.8 + Math.random() * 0.4);
+  const at = Math.max(now + backoff, nextSlot);
+  retry[tabId] = { attempt, at };
+  await chrome.storage.session.set({ retry, nextSlot: at + RETRY_GAP });
+  return { delay: Math.round(at - now), attempt, max: RETRY_MAX };
+}
+
+async function forgetRetry(tabId) {
+  const { retry = {} } = await chrome.storage.session.get('retry');
+  if (!(tabId in retry)) return;
+  delete retry[tabId];
+  await chrome.storage.session.set({ retry });
+}
+
+// ---- 履歴から開き直す ----
+// 同じ contentId のタブが既に開いていれば新しく開かずそこを使う。
+// まとめて開く時は REOPEN_GAP ずつ間隔をあけて、Too many requests を起こしにくくする。
+const REOPEN_GAP = 1_500;
+let reopening = false;
+
+async function removeFromLog(entry) {
+  const { log = [] } = await chrome.storage.local.get('log');
+  await chrome.storage.local.set({ log: log.filter((e) => !(e.at === entry.at && e.url === entry.url)) });
+}
+
+async function reopen(entries, focus) {
+  const tabs = await chrome.tabs.query({});
+  const openIds = new Map();
+  for (const t of tabs) {
+    const id = contentIdFromUrl(tabUrl(t));
+    if (id && !openIds.has(id)) openIds.set(id, t);
+  }
+  const done = new Set();
+  let opened = 0;
+  for (const e of entries) {
+    const id = e.contentId || contentIdFromUrl(e.url);
+    const key = id || e.url;
+    const existing = id && openIds.get(id);
+    if (existing) {
+      if (focus) {
+        await chrome.tabs.update(existing.id, { active: true }).catch(() => {});
+        await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
+      }
+    } else if (!done.has(key)) {
+      if (opened++ > 0) await sleep(REOPEN_GAP);
+      await chrome.tabs.create({ url: e.url, active: focus });
+    }
+    done.add(key);
+    // 開き直した分は履歴から外す（途中で止まっても、開いた分だけ消える）
+    await enqueue(() => removeFromLog(e));
+  }
+}
+
+// ---- 手動一括処理 ----
 const LOAD_TIMEOUT = 30_000;  // ページ読み込み完了を待つ上限
 const PROBE_TIMEOUT = 15_000; // 読み込み後、Gofile の表示が出るのを待つ上限
 const CONCURRENCY = 3;        // 同時に再読み込みするタブ数
@@ -99,9 +170,10 @@ async function waitComplete(tabId, timeout) {
   return chrome.tabs.get(tabId).catch(() => null);
 }
 
+// 戻り値: 'notFound' | 'tooMany' | null
 const runProbe = async (tabId) => {
-  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: probeNotFound });
-  return res?.result === true;
+  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: probePage });
+  return res?.result ?? null;
 };
 
 // 1タブを確認する。戻り値: 'notFound' | 'exists' | 'unchecked'
@@ -118,7 +190,9 @@ async function checkTab(tab) {
     const justLoaded = wasSleeping || tab.status !== 'complete';
     const end = Date.now() + (justLoaded ? PROBE_TIMEOUT : 0);
     let found = await runProbe(tab.id);
-    while (!found && Date.now() < end) {
+    while (found !== 'notFound' && Date.now() < end) {
+      // Too many requests なら確認できない。再読み込みは content.js に任せ、休止状態にも戻さない
+      if (found === 'tooMany') return 'unchecked';
       await sleep(1000);
       t = await chrome.tabs.get(tab.id).catch(() => null);
       if (!t || contentIdFromUrl(t.url) !== id) return 'unchecked';
@@ -127,7 +201,8 @@ async function checkTab(tab) {
       found = await runProbe(tab.id);
     }
 
-    if (found) return (await closeTab(t, 'notFound')) ? 'notFound' : 'unchecked';
+    if (found === 'tooMany') return 'unchecked';
+    if (found === 'notFound') return (await closeTab(t, 'notFound')) ? 'notFound' : 'unchecked';
     // 元々休止中で、今見ていないタブは休止状態に戻してメモリを節約する
     if (wasSleeping && !t.active) await chrome.tabs.discard(tab.id).catch(() => {});
     return 'exists';
@@ -194,6 +269,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     enqueue(scanAll).then(sendResponse);
     return true; // 非同期で応答する
   }
+  if (msg?.type === 'tooMany' && sender.tab) {
+    enqueue(() => handleTooMany(sender.tab.id)).then(sendResponse);
+    return true;
+  }
+  if (msg?.type === 'reopen') {
+    if (reopening) { sendResponse({ busy: true }); return; }
+    reopening = true;
+    reopen(msg.entries || [], !!msg.focus)
+      .catch((e) => console.warn(e))
+      .finally(() => { reopening = false; sendResponse({}); });
+    return true;
+  }
   if (msg?.type === 'status') {
     getStatus().then(sendResponse);
     return true;
@@ -219,3 +306,5 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (autoDedupe) await dedupe(id);
   });
 });
+
+chrome.tabs.onRemoved.addListener((tabId) => enqueue(() => forgetRetry(tabId)));

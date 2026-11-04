@@ -12,12 +12,14 @@ export function contentIdFromUrl(url) {
   }
 }
 
-// ページ内で実行する「不存在」判定。
-// タイトルと見出しの両方が一致した時だけ true を返す（どちらか片方だけでは閉じない）。
+// ページ内で実行する判定。戻り値: 'notFound' | 'tooMany' | null
+// - notFound: タイトルと見出しの両方が一致した時だけ（どちらか片方だけでは閉じない）
+// - tooMany: アクセス集中時の「Too many requests」だけが書かれたページ
 // content.js にも同じ判定があるので、変更する時は両方そろえること。
-export function probeNotFound() {
+export function probePage() {
+  if (/^too many requests\.?$/i.test((document.body?.innerText || '').trim())) return 'tooMany';
   const titleOk = /^Content not found\b/.test(document.title);
   const h1Ok = [...document.querySelectorAll('main h1')]
     .some((h) => h.textContent.trim() === 'This content does not exist');
-  return titleOk && h1Ok;
+  return titleOk && h1Ok ? 'notFound' : null;
 }
