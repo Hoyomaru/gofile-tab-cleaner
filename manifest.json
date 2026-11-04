@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gofile Tab Cleaner",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Gofile の /d/<contentId> タブについて、不存在が確定したタブを閉じ、同一コンテンツの重複タブを整理します。Too many requests のタブは時間をおいて再読み込みします。",
   "permissions": ["tabs", "storage", "scripting", "alarms"],
   "host_permissions": ["https://gofile.io/*", "https://www.gofile.io/*"],

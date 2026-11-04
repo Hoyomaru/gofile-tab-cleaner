@@ -16,17 +16,25 @@ const enqueue = (fn) => (queue = queue.then(fn, fn).catch((e) => console.warn(e)
 const withinRetention = (log, days) =>
   days > 0 ? log.filter((e) => e.at >= Date.now() - days * DAY) : log;
 
-async function addLog(entry) {
+// 履歴の読み書きは専用の列に並べる（一括整理は queue の外で動くため、queue とは別にする）
+let logQueue = Promise.resolve();
+const withLog = (fn) => {
+  const next = logQueue.then(fn, fn);
+  logQueue = next.catch((e) => console.warn(e));
+  return next;
+};
+
+const addLog = (entry) => withLog(async () => {
   const [{ log = [] }, { retentionDays }] = await Promise.all([chrome.storage.local.get('log'), getSettings()]);
   log.unshift(entry);
   await chrome.storage.local.set({ log: withinRetention(log, retentionDays).slice(0, LOG_MAX) });
-}
+});
 
-async function pruneLog() {
+const pruneLog = () => withLog(async () => {
   const [{ log = [] }, { retentionDays }] = await Promise.all([chrome.storage.local.get('log'), getSettings()]);
   const kept = withinRetention(log, retentionDays);
   if (kept.length !== log.length) await chrome.storage.local.set({ log: kept });
-}
+});
 
 async function closeTab(tab, reason) {
   try {
@@ -120,10 +128,10 @@ async function forgetRetry(tabId) {
 const REOPEN_GAP = 1_500;
 let reopening = false;
 
-async function removeFromLog(entry) {
+const removeFromLog = (entry) => withLog(async () => {
   const { log = [] } = await chrome.storage.local.get('log');
   await chrome.storage.local.set({ log: log.filter((e) => !(e.at === entry.at && e.url === entry.url)) });
-}
+});
 
 async function reopen(entries, focus) {
   const tabs = await chrome.tabs.query({});
@@ -149,7 +157,7 @@ async function reopen(entries, focus) {
     }
     done.add(key);
     // 開き直した分は履歴から外す（途中で止まっても、開いた分だけ消える）
-    await enqueue(() => removeFromLog(e));
+    await removeFromLog(e);
   }
 }
 
@@ -222,7 +230,9 @@ async function scanAll() {
   scanState = { done: 0, total: 0 };
   reportProgress();
   try {
-    const duplicates = await dedupe();
+    // 重複整理だけは自動の重複整理と同時に動かないよう queue に並べる。
+    // 各タブの確認は時間がかかるので queue の外で行い、その間も自動処理（再試行・不存在・重複）を止めない
+    const duplicates = (await enqueue(() => dedupe())) ?? 0; // enqueue は失敗時に undefined を返す
     const tabs = (await chrome.tabs.query({})).filter((t) => contentIdFromUrl(t.url) && !t.pinned);
     scanState.total = tabs.length;
     reportProgress();
@@ -265,8 +275,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.type === 'scanAll') {
     if (scanState) { sendResponse({ busy: true }); return; }
-    scanState = { done: 0, total: 0 }; // 待ち行列に入った時点で「整理中」にする
-    enqueue(scanAll).then(sendResponse);
+    scanState = { done: 0, total: 0 }; // すぐに「整理中」にして二重実行を防ぐ
+    scanAll().then(sendResponse, (e) => { console.warn(e); sendResponse({ error: String(e?.message || e) }); });
     return true; // 非同期で応答する
   }
   if (msg?.type === 'tooMany' && sender.tab) {
