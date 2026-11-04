@@ -279,6 +279,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     scanAll().then(sendResponse, (e) => { console.warn(e); sendResponse({ error: String(e?.message || e) }); });
     return true; // 非同期で応答する
   }
+  if (msg?.type === 'loaded' && sender.tab) {
+    enqueue(() => forgetRetry(sender.tab.id));
+    return;
+  }
   if (msg?.type === 'tooMany' && sender.tab) {
     enqueue(() => handleTooMany(sender.tab.id)).then(sendResponse);
     return true;

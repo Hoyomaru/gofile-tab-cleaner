@@ -35,6 +35,9 @@
     return;
   }
 
+  // 普通に開けたので、このタブの再試行回数を数え直してもらう
+  chrome.runtime.sendMessage({ type: 'loaded' }).catch(() => {});
+
   // ---- 不存在の検出 ----
   let reportedFor = null; // 報告済みの contentId（同じ id で二重送信しない）
   let timer = null;
