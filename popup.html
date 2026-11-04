@@ -10,70 +10,79 @@
     <h1>Gofile Tab Cleaner</h1>
   </header>
 
-  <section class="stats" aria-label="現在のタブ状況">
+  <section class="stats" aria-label="今のタブの状況">
     <div class="stat"><span class="num" id="statTotal">–</span><span class="lbl">Gofile タブ</span></div>
     <div class="stat"><span class="num" id="statDup">–</span><span class="lbl">重複</span></div>
     <div class="stat"><span class="num" id="statSleep">–</span><span class="lbl">未読み込み</span></div>
   </section>
 
-  <section class="card">
-    <label class="row">
-      <span class="text">
-        <span class="title">不存在タブを自動で閉じる</span>
-        <span class="desc">「This content does not exist」表示を検出したら閉じます</span>
-      </span>
-      <input type="checkbox" class="switch" id="autoNotFound">
-    </label>
-    <label class="row">
-      <span class="text">
-        <span class="title">重複タブを自動で閉じる</span>
-        <span class="desc">最初に開いたタブを残します（全ウィンドウ対象）</span>
-      </span>
-      <input type="checkbox" class="switch" id="autoDedupe">
-    </label>
-    <label class="row">
-      <span class="text">
-        <span class="title">Too many requests を自動で再読み込み</span>
-        <span class="desc">間隔をあけて最大5回まで再試行します（タブは閉じません）</span>
-      </span>
-      <input type="checkbox" class="switch" id="autoRetry">
-    </label>
-    <label class="row">
-      <span class="text">
-        <span class="title">履歴の保存期間</span>
-        <span class="desc">期間を過ぎた「最近閉じたタブ」を自動で消します</span>
-      </span>
-      <select id="retentionDays" class="select">
-        <option value="1">1日</option>
-        <option value="3">3日</option>
-        <option value="7">7日</option>
-        <option value="30">30日</option>
-        <option value="0">無期限</option>
-      </select>
-    </label>
+  <section class="scan">
+    <button id="scan" class="btn primary wide">今すぐ全タブを整理</button>
+    <div id="progress" class="progress" hidden>
+      <div class="meter" role="progressbar" aria-label="整理の進み具合" aria-valuemin="0" aria-valuemax="100" id="progressBar">
+        <div class="fill" id="progressFill"></div>
+      </div>
+      <div class="progress-text" id="progressText" aria-live="polite"></div>
+    </div>
+    <div id="result" class="result" aria-live="polite"></div>
   </section>
 
-  <section class="scan">
-    <button id="scan" class="primary">今すぐ全タブを整理</button>
-    <div id="progress" class="progress" hidden>
-      <div class="bar"><div class="fill" id="progressFill"></div></div>
-      <div class="progress-text" id="progressText"></div>
+  <details class="auto" id="auto">
+    <summary>
+      <span class="auto-label">自動処理</span>
+      <span class="auto-summary" id="autoSummary"></span>
+      <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5 10 8l-4.5 4.5" /></svg>
+    </summary>
+    <div class="auto-body">
+      <label class="row">
+        <span class="text">
+          <span class="title">不存在タブを閉じる</span>
+          <span class="desc">「This content does not exist」と表示されたら閉じます</span>
+        </span>
+        <input type="checkbox" class="switch" id="autoNotFound">
+      </label>
+      <label class="row">
+        <span class="text">
+          <span class="title">重複タブを閉じる</span>
+          <span class="desc">最初に開いたタブを残します（全ウィンドウ対象）</span>
+        </span>
+        <input type="checkbox" class="switch" id="autoDedupe">
+      </label>
+      <label class="row">
+        <span class="text">
+          <span class="title">Too many requests を再読み込み</span>
+          <span class="desc">間隔をあけて最大5回まで。タブは閉じません</span>
+        </span>
+        <input type="checkbox" class="switch" id="autoRetry">
+      </label>
+      <label class="row">
+        <span class="text">
+          <span class="title">履歴の保存期間</span>
+          <span class="desc">過ぎた「最近閉じたタブ」は自動で消えます</span>
+        </span>
+        <select id="retentionDays" class="select">
+          <option value="1">1日</option>
+          <option value="3">3日</option>
+          <option value="7">7日</option>
+          <option value="30">30日</option>
+          <option value="0">無期限</option>
+        </select>
+      </label>
     </div>
-    <div id="result" class="result"></div>
-  </section>
+  </details>
 
   <section class="history">
     <div class="history-head">
       <h2>最近閉じたタブ</h2>
       <div class="actions">
-        <button id="reopenAll" class="ghost" title="表示中の履歴をすべて開き直す（混雑を避けるため少しずつ開きます）">すべて開く</button>
-        <button id="clear" class="ghost" title="履歴を消去">クリア</button>
+        <button id="reopenAll" class="btn ghost" title="表示中の履歴をすべて開き直します（混雑を避けるため少しずつ開きます）">すべて開く</button>
+        <button id="clear" class="btn ghost danger-text" data-confirm="もう一度押すと消します">履歴を消す</button>
       </div>
     </div>
-    <div class="filters" role="tablist">
-      <button class="chip active" data-filter="all">すべて <span id="cntAll"></span></button>
-      <button class="chip" data-filter="notFound">不存在 <span id="cntNotFound"></span></button>
-      <button class="chip" data-filter="duplicate">重複 <span id="cntDuplicate"></span></button>
+    <div class="chips" role="group" aria-label="履歴の絞り込み">
+      <button class="chip active" data-filter="all" aria-pressed="true">すべて <span class="n" id="cntAll"></span></button>
+      <button class="chip" data-filter="notFound" aria-pressed="false">不存在 <span class="n" id="cntNotFound"></span></button>
+      <button class="chip" data-filter="duplicate" aria-pressed="false">重複 <span class="n" id="cntDuplicate"></span></button>
     </div>
     <ul id="log"></ul>
   </section>
