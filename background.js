@@ -7,6 +7,11 @@ const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 const LOG_MAX = 500;
 
 const getSettings = () => chrome.storage.sync.get(DEFAULTS);
+// タブの URL は 2 通りに使い分ける。
+// - tabUrl(t)（読み込み中なら行き先の pendingUrl）: 重複の整理・件数・開き直し。これから表示される
+//   コンテンツで判断したいので、読み込みが終わる前から数に入れる
+// - t.url（今表示しているページ）: 不存在の判定（handleNotFound・scanAll・checkTab）。
+//   判定はページの中身を見るので、実際に表示されているページの URL と合わせる
 const tabUrl = (t) => t.pendingUrl || t.url || '';
 
 // 処理を1本の列に並べて、同時実行による二重クローズを防ぐ
@@ -54,12 +59,12 @@ async function closeTab(tab, reason) {
 }
 
 // ---- 重複整理 ----
-// Gofile タブを contentId ごとにまとめる。onlyId を渡すとその contentId だけ。
-function groupByContent(tabs, onlyId = null) {
+// Gofile タブを contentId ごとにまとめる。onlyIds（Set）を渡すとその contentId だけ。
+function groupByContent(tabs, onlyIds = null) {
   const groups = new Map();
   for (const t of tabs) {
     const id = contentIdFromUrl(tabUrl(t));
-    if (!id || (onlyId && id !== onlyId)) continue;
+    if (!id || (onlyIds && !onlyIds.has(id))) continue;
     if (!groups.has(id)) groups.set(id, []);
     groups.get(id).push(t);
   }
@@ -74,8 +79,8 @@ function splitDuplicates(list) {
   return { keep: sorted[0], dups: sorted.slice(1).filter((t) => !t.pinned) };
 }
 
-async function dedupe(onlyId = null) {
-  const groups = groupByContent(await chrome.tabs.query({}), onlyId);
+async function dedupe(onlyIds = null) {
+  const groups = groupByContent(await chrome.tabs.query({}), onlyIds);
   let closed = 0;
   for (const list of groups.values()) {
     const { keep, dups } = splitDuplicates(list);
@@ -409,14 +414,26 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && changes.retentionDays) enqueue(pruneLog);
 });
 
+// 自動の重複整理。ブラウザ起動時の復元などで URL の変化が一度にたくさん届くので、
+// DEDUPE_DELAY の間に届いた contentId をまとめて、全タブの取得を 1 回で済ませる
+const DEDUPE_DELAY = 200;
+const pendingDedupe = new Set();
+let dedupeTimer = null;
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (!changeInfo.url) return;
   const id = contentIdFromUrl(changeInfo.url);
   if (!id) return;
-  enqueue(async () => {
-    const { autoDedupe } = await getSettings();
-    if (autoDedupe) await dedupe(id);
-  });
+  pendingDedupe.add(id);
+  clearTimeout(dedupeTimer);
+  dedupeTimer = setTimeout(() => {
+    const ids = new Set(pendingDedupe);
+    pendingDedupe.clear();
+    enqueue(async () => {
+      const { autoDedupe } = await getSettings();
+      if (autoDedupe) await dedupe(ids);
+    });
+  }, DEDUPE_DELAY);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => enqueue(() => forgetRetry(tabId)));
