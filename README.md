@@ -89,8 +89,16 @@ URL の `/d/` の後ろ（contentId）が同じタブを重複とみなします
 
 ## 開発メモ
 
-- アイコンは `pwsh tools/make-icons.ps1` で `icons/` に再生成できます（Windows）
-- リリース用 ZIP は `pwsh tools/make-release.ps1` で `dist/` に作れます（バージョンは `manifest.json` から取得）
+- リリース用 ZIP は、`manifest.json` のバージョンを上げてコミットし、同じ名前のタグ（例：`v0.6.0`）を付けてから作ります
+
+  ```sh
+  git archive --format=zip --prefix=gofile-tab-cleaner/ -o dist/gofile-tab-cleaner-v0.6.0.zip v0.6.0
+  ```
+
+  - タグの時点のファイルから作るので、コミットしていない変更は入りません
+  - `docs/` や設定ファイルは `.gitattributes` の `export-ignore` で除かれ、拡張機能の動作に必要なファイルだけが入ります
+- アイコン（`icons/`）は PowerShell のスクリプトで作りました。作り直す時は、履歴から `git restore --source=v0.5.0 tools/make-icons.ps1` で元の場所に戻し、`pwsh tools/make-icons.ps1` を実行してください（Windows、出力先は `icons/`）。終わったら `tools/` は消してかまいません
+- 開発中はリポジトリのフォルダをそのまま「パッケージ化されていない拡張機能を読み込む」で読み込めます
 - Gofile の画面の文言が変わると不存在判定が動かなくなります。判定の決まり（URL・タイトル・見出し・Too many requests の文言）はすべて `common.js` にあるので、そこだけを直してください
   - `common.js` は content script・ES module・`executeScript` のどれからも読み込めるよう、`import` / `export` を使わずに `globalThis.gofile` へ置いています
 

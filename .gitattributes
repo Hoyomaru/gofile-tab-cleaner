@@ -1,3 +1,9 @@
 * text=auto eol=lf
 *.png binary
 *.jpg binary
+
+# リリース用 ZIP（git archive）に入れないもの。拡張機能の動作に必要なファイルだけを入れる
+/docs export-ignore
+/.editorconfig export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
