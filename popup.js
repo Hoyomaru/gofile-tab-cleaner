@@ -64,6 +64,10 @@ function showProgress(scan) {
 
 function showResult(r) {
   if (!r) { $('result').textContent = ''; return; }
+  if (r.error) {
+    $('result').textContent = `前回の整理（${relTime(r.at)}）は途中で失敗しました（${r.error}）。拡張機能を再読み込みしてから、もう一度試してください。`;
+    return;
+  }
   let text = `前回の整理（${relTime(r.at)}）：重複 ${r.duplicates} 件・不存在 ${r.notFound} 件を閉じました`;
   if (r.unchecked) text += `。確認できなかった ${r.unchecked} 件はそのままです`;
   $('result').textContent = text;
@@ -222,11 +226,12 @@ document.querySelectorAll('.chip').forEach((chip) => {
 
 $('scan').addEventListener('click', async () => {
   showProgress({ done: 0, total: 0 });
+  // background はすぐに応答する。進捗は progress メッセージ、結果は lastScan の変化で届く
   const r = await chrome.runtime.sendMessage({ type: 'scanAll' }).catch(() => null);
-  if (r?.busy) return; // 既に整理中（進捗は progress メッセージで届く）
-  if (!r || r.error) {
+  if (!r) {
     showProgress(null);
-    $('result').textContent = `整理できませんでした（${r?.error || '応答がありません'}）。拡張機能を再読み込みしてから、もう一度試してください。`;
+    $('result').textContent = '整理を始められませんでした（応答がありません）。拡張機能を再読み込みしてから、もう一度試してください。';
+    return;
   }
   refreshStatus();
 });

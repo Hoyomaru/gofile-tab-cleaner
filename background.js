@@ -299,8 +299,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'scanAll') {
     if (scanState) { sendResponse({ busy: true }); return; }
     scanState = { done: 0, total: 0 }; // すぐに「整理中」にして二重実行を防ぐ
-    scanAll().then(sendResponse, (e) => { console.warn(e); sendResponse({ error: String(e?.message || e) }); });
-    return true; // 非同期で応答する
+    // 整理はタブが多いと数分かかる。応答を長く待たせると service worker が止められることがあるので、
+    // すぐに応答し、結果（失敗時は error）は lastScan に保存する。ポップアップは storage の変化で表示する
+    scanAll().catch((e) => {
+      console.warn(e);
+      return chrome.storage.local.set({ lastScan: { error: String(e?.message || e), at: Date.now() } });
+    }).catch((e) => console.warn(e));
+    sendResponse({ started: true });
+    return;
   }
   if (msg?.type === 'loaded' && sender.tab) {
     enqueue(() => forgetRetry(sender.tab.id));
