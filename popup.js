@@ -1,9 +1,8 @@
-import './common.js'; // globalThis.gofile を用意する（Gofile の URL と画面の見分け方）
+import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意する
 
 const { contentIdFromUrl, nameFromTitle } = globalThis.gofile;
-const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
+const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry'];
-const DAY = 86_400_000;
 const REASON = { notFound: '不存在', duplicate: '重複' };
 // 理由ごとの札の色（共通の状態色。不存在は注意、重複は目立たせない）
 const REASON_TONE = { notFound: 'warn', duplicate: '' };
@@ -17,7 +16,7 @@ let retentionDays = DEFAULTS.retentionDays;
 
 // 削除処理（1時間ごと）を待たずに、期限切れは表示から外す
 const setLog = (entries) => {
-  log = retentionDays > 0 ? entries.filter((e) => e.at >= Date.now() - retentionDays * DAY) : entries;
+  log = withinRetention(entries, retentionDays);
 };
 
 // ---- 時刻表示 ----
@@ -43,6 +42,7 @@ async function refreshStatus() {
   again.hidden = !st.gaveUp;
   again.textContent = `再試行を中止した ${st.gaveUp} タブをもう一度試す`;
   showProgress(st.scan);
+  showReopen(st.reopen ?? null);
 }
 
 function showProgress(scan) {
@@ -90,7 +90,6 @@ function renderLog() {
   $('cntDuplicate').textContent = counts.duplicate;
 
   const items = visibleEntries();
-  $('reopenAll').disabled = !items.length;
   $('clear').disabled = !log.length;
 
   const ul = $('log');
@@ -134,9 +133,21 @@ function renderLog() {
     li.append(tag, info, btn);
     ul.append(li);
   }
+  showReopen(reopenState);
 }
 
 const visibleEntries = () => (filter === 'all' ? log : log.filter((e) => e.reason === filter));
+
+// 開き直している間は、終わるまで「すべて開く」と ↻ を押せなくし、進み具合を表示する
+// （background は開き直しを1つずつしか受け付けない）
+let reopenState = null; // { done, total } | null
+function showReopen(state) {
+  reopenState = state;
+  const all = $('reopenAll');
+  all.disabled = !!state || !visibleEntries().length;
+  all.textContent = state && state.total > 1 ? `開いています… ${state.done} / ${state.total}` : 'すべて開く';
+  for (const b of document.querySelectorAll('#log .reopen')) b.disabled = !!state;
+}
 
 // 開き直す。実際の処理は background が行う（まとめて開く時は間隔をあけるので、
 // ポップアップを閉じても最後まで開けるように）。
@@ -173,6 +184,8 @@ function confirmTwice(button, action) {
 
 // ---- 初期化 ----
 async function init() {
+  // 回数は common.js の RETRY_MAX に合わせる（HTML の文は読み込み前の仮の表示）
+  $('retryDesc').textContent = `間隔をあけて最大${RETRY_MAX}回まで。タブは閉じません`;
   const s = await chrome.storage.sync.get(DEFAULTS);
   for (const key of SWITCHES) {
     $(key).checked = s[key];
@@ -209,6 +222,7 @@ async function init() {
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === 'progress') { showProgress(msg.scan); if (!msg.scan) refreshStatus(); }
+    if (msg?.type === 'reopenProgress') showReopen(msg.reopen);
   });
 
   // 「○分前」の表示を更新

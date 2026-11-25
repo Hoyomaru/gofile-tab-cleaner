@@ -210,5 +210,6 @@ li.item:first-child { border-top: 0; }
   border: 0; border-radius: var(--r-s); background: none; color: var(--muted); cursor: pointer;
 }
 .reopen svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.reopen:hover { background: var(--soft); color: var(--accent-strong); }
+.reopen:hover:not(:disabled) { background: var(--soft); color: var(--accent-strong); }
+.reopen:disabled { opacity: .4; cursor: default; }
 .empty { text-align: center; color: var(--muted); padding: 18px 0; font-size: var(--fs-s); }

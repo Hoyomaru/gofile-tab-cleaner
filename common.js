@@ -1,6 +1,8 @@
-// Gofile の URL と画面の見分け方をここに 1 か所でまとめる。Gofile の文言が変わったら、ここだけを直す。
+// 共通の決まりごとを 2 つにまとめて置く。
+// - globalThis.gofile: Gofile の URL と画面の見分け方。Gofile の文言が変わったら、ここだけを直す
+// - globalThis.tabCleaner: 設定の既定値など、background.js と popup.js で共通の値
 //
-// import / export を使わずに globalThis.gofile へ置くので、同じファイルを次の 3 通りで使える。
+// import / export を使わずに globalThis へ置くので、同じファイルを次の 3 通りで使える。
 // - content script（manifest の content_scripts で content.js より先に読み込む）
 // - ES module（background.js と popup.js から import './common.js'）
 // - 手動整理でタブに入れる時（chrome.scripting.executeScript の files）
@@ -44,4 +46,20 @@ globalThis.gofile = (() => {
   }
 
   return { contentIdFromUrl, isLoadingTitle, isNotFoundTitle, nameFromTitle, probe };
+})();
+
+// background.js と popup.js で共通の設定と決まりごと（Gofile とは関係ない部分）。
+// 既定値や回数を変える時はここだけを直す。
+globalThis.tabCleaner = (() => {
+  // retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
+  const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
+  const DAY = 86_400_000;
+  // Too many requests を再試行する最大回数（ポップアップの説明文もこの値から作る）
+  const RETRY_MAX = 5;
+
+  // 保存期間を過ぎた履歴を取り除く
+  const withinRetention = (log, days) =>
+    days > 0 ? log.filter((e) => e.at >= Date.now() - days * DAY) : log;
+
+  return { DEFAULTS, RETRY_MAX, withinRetention };
 })();

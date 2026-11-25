@@ -1,12 +1,10 @@
-import './common.js'; // globalThis.gofile を用意する（Gofile の URL と画面の見分け方）
+import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意する
 
 const { contentIdFromUrl, isLoadingTitle, isNotFoundTitle } = globalThis.gofile;
+const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 
-// retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
-const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
 // 一括整理で数百タブを閉じても取り消せるよう多めに残す（古いものは保存期間で消える）
 const LOG_MAX = 500;
-const DAY = 86_400_000;
 
 const getSettings = () => chrome.storage.sync.get(DEFAULTS);
 const tabUrl = (t) => t.pendingUrl || t.url || '';
@@ -14,10 +12,6 @@ const tabUrl = (t) => t.pendingUrl || t.url || '';
 // 処理を1本の列に並べて、同時実行による二重クローズを防ぐ
 let queue = Promise.resolve();
 const enqueue = (fn) => (queue = queue.then(fn, fn).catch((e) => console.warn(e)));
-
-// 保存期間を過ぎた履歴を取り除く
-const withinRetention = (log, days) =>
-  days > 0 ? log.filter((e) => e.at >= Date.now() - days * DAY) : log;
 
 // 履歴の読み書きは専用の列に並べる（一括整理は queue の外で動くため、queue とは別にする）
 let logQueue = Promise.resolve();
@@ -60,35 +54,51 @@ async function closeTab(tab, reason) {
 }
 
 // ---- 重複整理 ----
-// 同じ contentId のタブのうち「最初に開いたタブ」(= tab.id が最小) を残す。
-// ピン留めタブは閉じない。ピン留めが含まれる場合はそれを優先して残す。
-async function dedupe(onlyId = null) {
-  const all = await chrome.tabs.query({});
+// Gofile タブを contentId ごとにまとめる。onlyId を渡すとその contentId だけ。
+function groupByContent(tabs, onlyId = null) {
   const groups = new Map();
-  for (const t of all) {
+  for (const t of tabs) {
     const id = contentIdFromUrl(tabUrl(t));
     if (!id || (onlyId && id !== onlyId)) continue;
     if (!groups.has(id)) groups.set(id, []);
     groups.get(id).push(t);
   }
+  return groups;
+}
 
+// 同じ contentId のタブのうち「最初に開いたタブ」(= tab.id が最小) を残す。
+// ピン留めタブは閉じない。ピン留めが含まれる場合はそれを優先して残す。
+// 実際の整理（dedupe）とポップアップの件数（getStatus）は、この決まりを共通で使う。
+function splitDuplicates(list) {
+  const sorted = [...list].sort((a, b) => (b.pinned - a.pinned) || (a.id - b.id));
+  return { keep: sorted[0], dups: sorted.slice(1).filter((t) => !t.pinned) };
+}
+
+async function dedupe(onlyId = null) {
+  const groups = groupByContent(await chrome.tabs.query({}), onlyId);
   let closed = 0;
   for (const list of groups.values()) {
-    if (list.length < 2) continue;
-    list.sort((a, b) => (b.pinned - a.pinned) || (a.id - b.id));
-    const keep = list[0];
-    const dups = list.slice(1).filter((t) => !t.pinned);
+    const { keep, dups } = splitDuplicates(list);
+    if (!dups.length) continue;
     const activeDup = dups.find((t) => t.active);
-    if (activeDup) {
-      // 見ていたタブを閉じる場合は、残すタブへ切り替える
-      await chrome.tabs.update(keep.id, { active: true }).catch(() => {});
-      if (keep.windowId !== activeDup.windowId) {
-        await chrome.windows.update(keep.windowId, { focused: true }).catch(() => {});
-      }
-    }
+    if (activeDup) await switchToKept(keep, activeDup);
     for (const t of dups) if (await closeTab(t, 'duplicate')) closed++;
   }
   return closed;
+}
+
+// 選ばれていた重複タブを閉じる前に、残すタブへ切り替える。
+// tab.active は「そのウィンドウで選ばれている」だけなので、別のウィンドウへ移るのは
+// いま見ているウィンドウ（最後にフォーカスしたウィンドウ）のタブだった時だけにする。
+async function switchToKept(keep, activeDup) {
+  if (keep.windowId === activeDup.windowId) {
+    await chrome.tabs.update(keep.id, { active: true }).catch(() => {});
+    return;
+  }
+  const focused = await chrome.windows.getLastFocused().catch(() => null);
+  if (focused?.id !== activeDup.windowId) return; // 後ろのウィンドウ：閉じるだけ（Chrome が隣のタブを選ぶ）
+  await chrome.tabs.update(keep.id, { active: true }).catch(() => {});
+  await chrome.windows.update(keep.windowId, { focused: true }).catch(() => {});
 }
 
 // ---- 不存在タブ（content.js からの報告）----
@@ -107,7 +117,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 待ち時間は 10秒 → 20秒 → 40秒… と倍にしていく（±20% ばらつかせる）。
 // さらに全タブで再読み込みの時刻を RETRY_GAP ずつずらし、一斉に再アクセスしないようにする。
 // 実際の待機と再読み込みはタブ側（content.js）で行う（service worker は止まることがあるため）。
-const RETRY_MAX = 5;
 const RETRY_BASE = 10_000;
 const RETRY_GAP = 2_000;
 const RETRY_RESET = 10 * 60_000; // 最後の再試行からこれだけ経ったら回数を数え直す
@@ -144,7 +153,12 @@ async function forgetRetry(tabId) {
 // 同じ contentId のタブが既に開いていれば新しく開かずそこを使う。
 // まとめて開く時は REOPEN_GAP ずつ間隔をあけて、Too many requests を起こしにくくする。
 const REOPEN_GAP = 1_500;
-let reopening = false;
+// 開き直しの進み具合。ポップアップを開き直しても表示でき、二重実行の判定にも使う
+let reopenState = null; // { done, total } | null
+
+function reportReopen() {
+  chrome.runtime.sendMessage({ type: 'reopenProgress', reopen: reopenState }).catch(() => {});
+}
 
 const removeFromLog = (entry) => withLog(async () => {
   const { log = [] } = await chrome.storage.local.get('log');
@@ -176,6 +190,8 @@ async function reopen(entries, focus) {
     done.add(key);
     // 開き直した分は履歴から外す（途中で止まっても、開いた分だけ消える）
     await removeFromLog(e);
+    reopenState.done++;
+    reportReopen();
   }
 }
 
@@ -314,19 +330,22 @@ async function scanAll() {
 // 今開いている Gofile タブの状況
 async function getStatus() {
   const tabs = (await chrome.tabs.query({})).filter((t) => contentIdFromUrl(tabUrl(t)));
-  const ids = new Set(tabs.map((t) => contentIdFromUrl(tabUrl(t))));
+  // 閉じられる重複タブの数（ピン留めは閉じないので数えない）
+  let duplicates = 0;
+  for (const list of groupByContent(tabs).values()) duplicates += splitDuplicates(list).dups.length;
   const sleeping = (t) => t.discarded || t.status === 'unloaded';
   // 再試行の記録は、今も開いている Gofile タブの分だけ数える
   const { retry = {} } = await chrome.storage.session.get('retry');
   const inRetry = tabs.filter((t) => retry[t.id]);
   return {
     total: tabs.length,
-    duplicates: tabs.length - ids.size, // 閉じられる重複タブの数
+    duplicates,
     sleeping: tabs.filter(sleeping).length,
     // 休止したタブは待機の時計も止まっているので、再試行待ちには数えない
     retrying: inRetry.filter((t) => !retry[t.id].gaveUp && !sleeping(t)).length,
     gaveUp: inRetry.filter((t) => retry[t.id].gaveUp).length,
     scan: scanState,
+    reopen: reopenState,
   };
 }
 
@@ -357,11 +376,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'reopen') {
-    if (reopening) { sendResponse({ busy: true }); return; }
-    reopening = true;
-    reopen(msg.entries || [], !!msg.focus)
+    if (reopenState) { sendResponse({ busy: true }); return; }
+    const entries = msg.entries || [];
+    reopenState = { done: 0, total: entries.length };
+    reportReopen();
+    reopen(entries, !!msg.focus)
       .catch((e) => console.warn(e))
-      .finally(() => { reopening = false; sendResponse({}); });
+      .finally(() => { reopenState = null; reportReopen(); sendResponse({}); });
     return true;
   }
   if (msg?.type === 'retryGaveUp') {
