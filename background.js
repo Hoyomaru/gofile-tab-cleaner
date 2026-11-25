@@ -36,13 +36,22 @@ const pruneLog = () => withLog(async () => {
   if (kept.length !== log.length) await chrome.storage.local.set({ log: kept });
 });
 
+// 手動整理の間にこの拡張機能が閉じたタブと、その理由（'notFound' | 'duplicate'）。
+// 整理中のタブを自動処理（content.js からの不存在報告や自動の重複整理）が先に閉じた時に、
+// checkTab が「確認できなかった」ではなく本当の理由で数えるために使う。
+const closedDuringScan = new Map();
+
 async function closeTab(tab, reason) {
+  // remove の完了を待つ間に checkTab がタブの消失に気づくことがあるので、先に記録する
+  const mark = scanState && !closedDuringScan.has(tab.id);
+  if (mark) closedDuringScan.set(tab.id, reason);
   try {
     await chrome.tabs.remove(tab.id);
     const url = tabUrl(tab);
     await addLog({ url, contentId: contentIdFromUrl(url), title: tab.title || '', reason, at: Date.now() });
     return true;
   } catch {
+    if (mark) closedDuringScan.delete(tab.id);
     return false; // 既に閉じられていた等
   }
 }
@@ -184,14 +193,17 @@ const runProbe = async (tabId) => {
   return res?.result ?? null;
 };
 
-// 1タブを確認する。戻り値: 'notFound' | 'exists' | 'unchecked'
+// 1タブを確認する。戻り値: 'notFound' | 'duplicate' | 'exists' | 'unchecked'
 async function checkTab(tab) {
   const id = contentIdFromUrl(tab.url);
   const wasSleeping = tab.discarded || tab.status === 'unloaded';
+  // 確認中にタブが消えた時の扱い。自動処理が閉じたのならその理由、それ以外は確認できなかった扱い
+  const gone = () => closedDuringScan.get(tab.id) ?? 'unchecked';
   try {
     if (wasSleeping) await chrome.tabs.reload(tab.id);
     let t = await waitComplete(tab.id, LOAD_TIMEOUT);
-    if (!t || t.status !== 'complete' || contentIdFromUrl(t.url) !== id) return 'unchecked';
+    if (!t) return gone();
+    if (t.status !== 'complete' || contentIdFromUrl(t.url) !== id) return 'unchecked';
 
     // Gofile は読み込み完了後に中身を描画するので、不存在表示が出るまで少し待つ。
     // 表示が出なければ「存在する（または判断できない）」として閉じない。
@@ -203,19 +215,22 @@ async function checkTab(tab) {
       if (found === 'tooMany') return 'unchecked';
       await sleep(1000);
       t = await chrome.tabs.get(tab.id).catch(() => null);
-      if (!t || contentIdFromUrl(t.url) !== id) return 'unchecked';
+      if (!t) return gone();
+      if (contentIdFromUrl(t.url) !== id) return 'unchecked';
       // タイトルが読み込み中の "Files · Gofile" 以外になったら描画済みとみなす
       if (!/^Files\b/.test(t.title || '') && !/^Content not found\b/.test(t.title || '')) break;
       found = await runProbe(tab.id);
     }
 
     if (found === 'tooMany') return 'unchecked';
-    if (found === 'notFound') return (await closeTab(t, 'notFound')) ? 'notFound' : 'unchecked';
+    // 閉じられなかった時は、自動処理が先に閉じていないかを確かめる
+    if (found === 'notFound') return (await closeTab(t, 'notFound')) ? 'notFound' : gone();
     // 元々休止中で、今見ていないタブは休止状態に戻してメモリを節約する
     if (wasSleeping && !t.active) await chrome.tabs.discard(tab.id).catch(() => {});
     return 'exists';
   } catch {
-    return 'unchecked';
+    // タブが消えると executeScript などが失敗する
+    return gone();
   }
 }
 
@@ -228,6 +243,7 @@ function reportProgress() {
 
 async function scanAll() {
   scanState = { done: 0, total: 0 };
+  closedDuringScan.clear();
   reportProgress();
   try {
     // 重複整理だけは自動の重複整理と同時に動かないよう queue に並べる。
@@ -236,7 +252,8 @@ async function scanAll() {
     const tabs = (await chrome.tabs.query({})).filter((t) => contentIdFromUrl(t.url) && !t.pinned);
     scanState.total = tabs.length;
     reportProgress();
-    const counts = { notFound: 0, exists: 0, unchecked: 0 };
+    // duplicate: 確認中に自動の重複整理が閉じたタブ
+    const counts = { notFound: 0, duplicate: 0, exists: 0, unchecked: 0 };
     let i = 0;
     const worker = async () => {
       while (i < tabs.length) {
@@ -246,11 +263,17 @@ async function scanAll() {
       }
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-    const result = { duplicates, notFound: counts.notFound, unchecked: counts.unchecked, at: Date.now() };
+    const result = {
+      duplicates: duplicates + counts.duplicate,
+      notFound: counts.notFound,
+      unchecked: counts.unchecked,
+      at: Date.now(),
+    };
     await chrome.storage.local.set({ lastScan: result });
     return result;
   } finally {
     scanState = null;
+    closedDuringScan.clear();
     reportProgress();
   }
 }
