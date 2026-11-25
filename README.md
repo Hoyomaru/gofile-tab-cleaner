@@ -85,7 +85,8 @@ URL の `/d/` の後ろ（contentId）が同じタブを重複とみなします
 
 - アイコンは `pwsh tools/make-icons.ps1` で `icons/` に再生成できます（Windows）
 - リリース用 ZIP は `pwsh tools/make-release.ps1` で `dist/` に作れます（バージョンは `manifest.json` から取得）
-- Gofile の画面の文言が変わると不存在判定が動かなくなります。その場合は `common.js` と `content.js` の判定条件を合わせて直してください
+- Gofile の画面の文言が変わると不存在判定が動かなくなります。判定の決まり（URL・タイトル・見出し・Too many requests の文言）はすべて `common.js` にあるので、そこだけを直してください
+  - `common.js` は content script・ES module・`executeScript` のどれからも読み込めるよう、`import` / `export` を使わずに `globalThis.gofile` へ置いています
 
 ## ライセンス
 

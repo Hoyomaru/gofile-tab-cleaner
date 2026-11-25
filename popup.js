@@ -1,5 +1,6 @@
-import { contentIdFromUrl } from './common.js';
+import './common.js'; // globalThis.gofile を用意する（Gofile の URL と画面の見分け方）
 
+const { contentIdFromUrl, nameFromTitle } = globalThis.gofile;
 const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
 const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry'];
 const DAY = 86_400_000;
@@ -75,11 +76,7 @@ function showResult(r) {
 
 // ---- 履歴 ----
 // 不存在タブのタイトルは "Content not found · Gofile" なので、意味のある時だけ表示する
-function displayName(e) {
-  const t = (e.title || '').replace(/\s*·\s*Gofile\s*$/, '').trim();
-  if (!t || /^(Content not found|Files)$/.test(t)) return null;
-  return t;
-}
+const displayName = (e) => nameFromTitle(e.title);
 
 function renderLog() {
   const counts = { all: log.length, notFound: 0, duplicate: 0 };

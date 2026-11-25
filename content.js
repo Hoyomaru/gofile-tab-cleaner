@@ -1,21 +1,12 @@
 // Gofile の /d/<id> ページで「不存在」表示を検出し、background に知らせる。
 // 「Too many requests」ページなら、background が決めた時間だけ待って再読み込みする。
-// 判定条件は common.js の probePage と同じ。
+// 判定の決まりは common.js（manifest でこのファイルより先に読み込む）の globalThis.gofile にある。
 (() => {
-  const isTooMany = () => /^too many requests\.?$/i.test((document.body?.innerText || '').trim());
-
-  const isNotFound = () =>
-    /^Content not found\b/.test(document.title) &&
-    [...document.querySelectorAll('main h1')]
-      .some((h) => h.textContent.trim() === 'This content does not exist');
-
-  const currentId = () => {
-    const m = location.pathname.match(/^\/d\/([A-Za-z0-9]+)\/?$/);
-    return m ? m[1] : null;
-  };
+  const { contentIdFromUrl, probe } = globalThis.gofile;
+  const currentId = () => contentIdFromUrl(location.href);
 
   // ---- Too many requests：時間をおいて再読み込み ----
-  if (isTooMany()) {
+  if (probe() === 'tooMany') {
     const id = currentId();
     chrome.runtime.sendMessage({ type: 'tooMany', contentId: id }).then((r) => {
       if (!r || r.off) return;
@@ -45,7 +36,7 @@
   function check() {
     const id = currentId();
     if (!id || reportedFor === id) return;
-    if (isNotFound()) {
+    if (probe() === 'notFound') {
       reportedFor = id;
       chrome.runtime.sendMessage({ type: 'notFound', contentId: id }).catch(() => {});
     }

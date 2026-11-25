@@ -1,4 +1,6 @@
-import { contentIdFromUrl, probePage } from './common.js';
+import './common.js'; // globalThis.gofile を用意する（Gofile の URL と画面の見分け方）
+
+const { contentIdFromUrl, isLoadingTitle, isNotFoundTitle } = globalThis.gofile;
 
 // retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
 const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
@@ -189,8 +191,12 @@ async function waitComplete(tabId, timeout) {
 }
 
 // 戻り値: 'notFound' | 'tooMany' | null
+// 拡張機能を入れる（読み込み直す）前から開いていたタブには content script がないので、
+// 毎回 common.js を入れてから判定する（content script と同じ isolated world で動く）
 const runProbe = async (tabId) => {
-  const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: probePage });
+  const target = { tabId };
+  await chrome.scripting.executeScript({ target, files: ['common.js'] });
+  const [res] = await chrome.scripting.executeScript({ target, func: () => globalThis.gofile.probe() });
   return res?.result ?? null;
 };
 
@@ -219,7 +225,7 @@ async function checkTab(tab) {
       if (!t) return gone();
       if (contentIdFromUrl(t.url) !== id) return 'unchecked';
       // タイトルが読み込み中の "Files · Gofile" 以外になったら描画済みとみなす
-      if (!/^Files\b/.test(t.title || '') && !/^Content not found\b/.test(t.title || '')) break;
+      if (!isLoadingTitle(t.title) && !isNotFoundTitle(t.title)) break;
       found = await runProbe(tab.id);
     }
 

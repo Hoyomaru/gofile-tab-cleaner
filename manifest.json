@@ -12,7 +12,7 @@
   "content_scripts": [
     {
       "matches": ["https://gofile.io/d/*", "https://www.gofile.io/d/*"],
-      "js": ["content.js"],
+      "js": ["common.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
