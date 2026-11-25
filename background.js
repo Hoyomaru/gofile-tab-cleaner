@@ -2,7 +2,8 @@ import { contentIdFromUrl, probePage } from './common.js';
 
 // retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
 const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
-const LOG_MAX = 50;
+// 一括整理で数百タブを閉じても取り消せるよう多めに残す（古いものは保存期間で消える）
+const LOG_MAX = 500;
 const DAY = 86_400_000;
 
 const getSettings = () => chrome.storage.sync.get(DEFAULTS);
