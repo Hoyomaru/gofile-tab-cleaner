@@ -119,7 +119,13 @@ async function handleTooMany(tabId) {
   const now = Date.now();
   const prev = retry[tabId];
   const attempt = prev && now - prev.at < RETRY_RESET ? prev.attempt + 1 : 1;
-  if (attempt > RETRY_MAX) return { delay: null, max: RETRY_MAX }; // あきらめる（タブは閉じない）
+  if (attempt > RETRY_MAX) {
+    // あきらめる（タブは閉じない）。ポップアップで数えてまとめて再試行できるよう、印を付けておく。
+    // 回数と時刻は変えないので、RETRY_RESET が過ぎるまでは手で再読み込みしても中止のまま
+    retry[tabId] = { ...prev, gaveUp: true };
+    await chrome.storage.session.set({ retry });
+    return { delay: null, max: RETRY_MAX };
+  }
   const backoff = RETRY_BASE * 2 ** (attempt - 1) * (0.8 + Math.random() * 0.4);
   const at = Math.max(now + backoff, nextSlot);
   retry[tabId] = { attempt, at };
@@ -170,6 +176,26 @@ async function reopen(entries, focus) {
     done.add(key);
     // 開き直した分は履歴から外す（途中で止まっても、開いた分だけ消える）
     await removeFromLog(e);
+  }
+}
+
+// ---- 再試行を中止したタブをもう一度試す（ポップアップのボタン）----
+// 中止の印を消して回数を数え直し、REOPEN_GAP ずつ間隔をあけて再読み込みする。
+// 読み込んだ後は、また Too many requests なら content.js が 1 回目から再試行を問い合わせる。
+let retryingGaveUp = false;
+
+async function retryGaveUp() {
+  const tabIds = (await enqueue(async () => {
+    const { retry = {} } = await chrome.storage.session.get('retry');
+    const ids = Object.keys(retry).filter((k) => retry[k].gaveUp).map(Number);
+    for (const id of ids) delete retry[id];
+    await chrome.storage.session.set({ retry });
+    return ids;
+  })) ?? []; // enqueue は失敗時に undefined を返す
+  let reloaded = 0;
+  for (const id of tabIds) {
+    if (reloaded++ > 0) await sleep(REOPEN_GAP);
+    await chrome.tabs.reload(id).catch(() => {});
   }
 }
 
@@ -289,10 +315,17 @@ async function scanAll() {
 async function getStatus() {
   const tabs = (await chrome.tabs.query({})).filter((t) => contentIdFromUrl(tabUrl(t)));
   const ids = new Set(tabs.map((t) => contentIdFromUrl(tabUrl(t))));
+  const sleeping = (t) => t.discarded || t.status === 'unloaded';
+  // 再試行の記録は、今も開いている Gofile タブの分だけ数える
+  const { retry = {} } = await chrome.storage.session.get('retry');
+  const inRetry = tabs.filter((t) => retry[t.id]);
   return {
     total: tabs.length,
     duplicates: tabs.length - ids.size, // 閉じられる重複タブの数
-    sleeping: tabs.filter((t) => t.discarded || t.status === 'unloaded').length,
+    sleeping: tabs.filter(sleeping).length,
+    // 休止したタブは待機の時計も止まっているので、再試行待ちには数えない
+    retrying: inRetry.filter((t) => !retry[t.id].gaveUp && !sleeping(t)).length,
+    gaveUp: inRetry.filter((t) => retry[t.id].gaveUp).length,
     scan: scanState,
   };
 }
@@ -329,6 +362,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     reopen(msg.entries || [], !!msg.focus)
       .catch((e) => console.warn(e))
       .finally(() => { reopening = false; sendResponse({}); });
+    return true;
+  }
+  if (msg?.type === 'retryGaveUp') {
+    if (retryingGaveUp) { sendResponse({ busy: true }); return; }
+    retryingGaveUp = true;
+    retryGaveUp()
+      .catch((e) => console.warn(e))
+      .finally(() => { retryingGaveUp = false; sendResponse({}); });
     return true;
   }
   if (msg?.type === 'status') {

@@ -38,6 +38,10 @@ async function refreshStatus() {
   $('statDup').textContent = st.duplicates;
   $('statSleep').textContent = st.sleeping;
   $('statDup').parentElement.classList.toggle('warn', st.duplicates > 0);
+  $('statRetry').textContent = st.retrying;
+  const again = $('retryGaveUp');
+  again.hidden = !st.gaveUp;
+  again.textContent = `再試行を中止した ${st.gaveUp} タブをもう一度試す`;
   showProgress(st.scan);
 }
 
@@ -195,8 +199,9 @@ async function init() {
   showResult(data.lastScan);
   refreshStatus();
 
-  // 自動クローズや整理で履歴が変わったら表示を更新
+  // 自動クローズや整理で履歴が変わった時、再試行の状況が変わった時に表示を更新
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'session' && changes.retry) { refreshStatus(); return; }
     if (area !== 'local') return;
     if (changes.log) { setLog(changes.log.newValue || []); renderLog(); refreshStatus(); }
     if (changes.lastScan) showResult(changes.lastScan.newValue);
@@ -230,6 +235,16 @@ $('scan').addEventListener('click', async () => {
     $('result').textContent = '整理を始められませんでした（応答がありません）。拡張機能を再読み込みしてから、もう一度試してください。';
     return;
   }
+  refreshStatus();
+});
+
+// 再試行を中止したタブの回数を数え直して、間隔をあけて再読み込みしてもらう。
+// 押すとすぐに中止の印が消えるので、ボタンは storage の変化で隠れる
+$('retryGaveUp').addEventListener('click', async () => {
+  const btn = $('retryGaveUp');
+  btn.disabled = true;
+  await chrome.runtime.sendMessage({ type: 'retryGaveUp' }).catch(() => null);
+  btn.disabled = false;
   refreshStatus();
 });
 
