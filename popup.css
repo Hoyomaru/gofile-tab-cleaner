@@ -155,8 +155,8 @@ h2 { font-size: var(--fs-m); font-weight: 600; margin: 0; }
 .result:empty { display: none; }
 .retry-again { margin-top: 8px; }
 /* ボタンが出ている間は、その分だけ履歴を短くしてポップアップの高さを 600px 以内に保つ */
-body:has(.retry-again:not([hidden])) #log { max-height: 184px; }
-body:has(#retryGaveUp:not([hidden])):has(#gotoPassword:not([hidden])) #log { max-height: 140px; }
+body:has(.retry-again:not([hidden])) #log { max-height: 160px; }
+body:has(#retryGaveUp:not([hidden])):has(#gotoPassword:not([hidden])) #log { max-height: 116px; }
 
 /* 自動処理（たたんで1行に） */
 .auto { border: 1px solid var(--border); border-radius: var(--r-l); margin-bottom: 14px; }
@@ -207,13 +207,16 @@ body:has(#retryGaveUp:not([hidden])):has(#gotoPassword:not([hidden])) #log { max
 }
 .open-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
 .open-count { font-size: var(--fs-s); color: var(--muted); }
+/* 開いている間は履歴を隠して、ポップアップの高さを 600px 以内に保つ（たためば戻る） */
+body:has(#openBox[open]) .history { display: none; }
+.open-list { margin-bottom: 14px; }
 
 /* 履歴 */
 .history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .actions { display: flex; gap: 2px; }
 .history .chips { margin-bottom: 6px; }
 
-ul { list-style: none; padding: 0; margin: 0; max-height: 228px; overflow-y: auto; }
+ul { list-style: none; padding: 0; margin: 0; max-height: 204px; overflow-y: auto; }
 li.item { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-top: 1px solid var(--border); }
 li.item:first-child { border-top: 0; }
 .info { flex: 1; min-width: 0; }
