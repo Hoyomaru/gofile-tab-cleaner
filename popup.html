@@ -87,6 +87,23 @@
     </div>
   </details>
 
+  <details class="auto open-list" id="openBox">
+    <summary>
+      <span class="auto-label">URL をまとめて開く</span>
+      <span class="auto-summary">貼った Gofile の URL を少しずつ開きます</span>
+      <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5 10 8l-4.5 4.5" /></svg>
+    </summary>
+    <div class="open-body">
+      <textarea id="openText" class="textarea" rows="4" spellcheck="false" aria-label="開く URL（1 行に 1 つ）"
+        placeholder="https://gofile.io/d/… または ID を 1 行に 1 つ&#10;文の中の URL も拾います"></textarea>
+      <div class="open-actions">
+        <span class="open-count" id="openCount" aria-live="polite"></span>
+        <button id="openGo" class="btn primary" disabled>開く</button>
+      </div>
+      <div class="result" id="openResult" aria-live="polite"></div>
+    </div>
+  </details>
+
   <section class="history">
     <div class="history-head">
       <h2>最近閉じたタブ</h2>

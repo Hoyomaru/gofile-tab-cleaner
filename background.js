@@ -1,6 +1,6 @@
 import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意する
 
-const { contentIdFromUrl, isLoadingTitle, isNotFoundTitle } = globalThis.gofile;
+const { contentIdFromUrl, isLoadingTitle, isNotFoundTitle, parseGofileList } = globalThis.gofile;
 const { DEFAULTS, DONE_MAX, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 
 // 一括整理で数百タブを閉じても取り消せるよう多めに残す（古いものは保存期間で消える）
@@ -258,6 +258,44 @@ async function reopen(entries, focus) {
   }
 }
 
+// ---- URL をまとめて開く（ポップアップに貼った一覧・右クリックで拾ったリンク）----
+// 飛ばすもの: すでに開いている（一覧の中で同じ contentId が 2 回目以降のものも含む）・履歴で不存在・済み。
+// 開くのは履歴の「すべて開く」と同じ列で、同じ間隔をあけて後ろで開く。開き始める前に件数を返す。
+// 戻り値: { busy: true } | { opened, skipped: { open, notFound, done }, unreadable }
+async function openList(text) {
+  if (reopenState) return { busy: true };
+  const { urls, skipped: unreadable } = parseGofileList(text);
+  const [{ log = [], done = {} }, tabs] = await Promise.all([
+    chrome.storage.local.get(['log', 'done']),
+    chrome.tabs.query({}),
+  ]);
+  if (reopenState) return { busy: true }; // 待っている間に別の開き直しが始まった
+  const notFound = new Set(log.filter((e) => e.reason === 'notFound').map((e) => e.contentId || contentIdFromUrl(e.url)));
+  const open = new Set(tabs.map((t) => contentIdFromUrl(tabUrl(t))).filter(Boolean));
+  const skipped = { open: 0, notFound: 0, done: 0 };
+  const toOpen = [];
+  for (const url of urls) {
+    const id = contentIdFromUrl(url);
+    if (open.has(id)) skipped.open++;
+    else if (notFound.has(id)) skipped.notFound++;
+    else if (id in done) skipped.done++;
+    else { toOpen.push(url); open.add(id); }
+  }
+  if (toOpen.length) {
+    reopenState = { done: 0, total: toOpen.length };
+    reportReopen();
+    (async () => {
+      for (const [i, url] of toOpen.entries()) {
+        if (i > 0) await sleep(REOPEN_GAP);
+        await chrome.tabs.create({ url, active: false }).catch((e) => console.warn(e));
+        reopenState.done++;
+        reportReopen();
+      }
+    })().catch((e) => console.warn(e)).finally(() => { reopenState = null; reportReopen(); });
+  }
+  return { opened: toOpen.length, skipped, unreadable };
+}
+
 // ---- 再試行を中止したタブをもう一度試す（ポップアップのボタン）----
 // 中止の印を消して回数を数え直し、REOPEN_GAP ずつ間隔をあけて再読み込みする。
 // 読み込んだ後は、また Too many requests なら content.js が 1 回目から再試行を問い合わせる。
@@ -458,6 +496,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     reopen(entries, !!msg.focus)
       .catch((e) => console.warn(e))
       .finally(() => { reopenState = null; reportReopen(); sendResponse({}); });
+    return true;
+  }
+  if (msg?.type === 'openList') {
+    openList(String(msg.text || '')).then(sendResponse, (e) => sendResponse({ error: String(e?.message || e) }));
     return true;
   }
   if (msg?.type === 'retryGaveUp') {

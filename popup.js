@@ -1,6 +1,6 @@
 import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意する
 
-const { contentIdFromUrl, nameFromTitle } = globalThis.gofile;
+const { contentIdFromUrl, nameFromTitle, parseGofileList } = globalThis.gofile;
 const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry', 'autoDone'];
 const REASON = { notFound: '不存在', duplicate: '重複', done: '済み' };
@@ -151,6 +151,7 @@ function showReopen(state) {
   all.disabled = !!state || !visibleEntries().length;
   all.textContent = state && state.total > 1 ? `開いています… ${state.done} / ${state.total}` : 'すべて開く';
   for (const b of document.querySelectorAll('#log .reopen')) b.disabled = !!state;
+  $('openGo').disabled = !!state || !parseGofileList($('openText').value).urls.length;
 }
 
 // 開き直す。実際の処理は background が行う（まとめて開く時は間隔をあけるので、
@@ -268,6 +269,54 @@ $('retryGaveUp').addEventListener('click', async () => {
 });
 
 $('reopenAll').addEventListener('click', () => reopen(visibleEntries(), false));
+
+// ---- URL をまとめて開く ----
+// OPEN_CONFIRM 件を超える時は、2 回押して確定する（1 回目で件数を見せる）
+const OPEN_CONFIRM = 30;
+let openArmed = null;
+function disarmOpen() {
+  clearTimeout(openArmed);
+  openArmed = null;
+  $('openGo').classList.remove('armed');
+  $('openGo').textContent = '開く';
+}
+function renderOpenCount() {
+  disarmOpen();
+  const { urls, skipped } = parseGofileList($('openText').value);
+  $('openGo').disabled = !urls.length || !!reopenState;
+  $('openCount').textContent = urls.length || skipped
+    ? `${urls.length} 件${skipped ? `・読み取れない行 ${skipped}` : ''}`
+    : '';
+}
+function showOpenResult(r) {
+  if (!r) { $('openResult').textContent = '開けませんでした（応答がありません）。拡張機能を再読み込みしてから、もう一度試してください。'; return; }
+  if (r.busy) { $('openResult').textContent = 'ほかのタブを開いている途中です。終わってからもう一度押してください。'; return; }
+  if (r.error) { $('openResult').textContent = `開けませんでした（${r.error}）。`; return; }
+  const skip = [
+    r.skipped.open && `開いている ${r.skipped.open}`,
+    r.skipped.notFound && `不存在 ${r.skipped.notFound}`,
+    r.skipped.done && `済み ${r.skipped.done}`,
+  ].filter(Boolean);
+  let text = r.opened ? `${r.opened} 件を順に開きます` : '開くものはありませんでした';
+  if (skip.length) text += `。飛ばした分：${skip.join('・')}`;
+  if (r.unreadable) text += `。読み取れなかった行 ${r.unreadable} 件`;
+  $('openResult').textContent = text;
+}
+$('openText').addEventListener('input', () => { $('openResult').textContent = ''; renderOpenCount(); });
+$('openGo').addEventListener('click', async () => {
+  const text = $('openText').value;
+  const n = parseGofileList(text).urls.length;
+  if (n > OPEN_CONFIRM && !openArmed) {
+    $('openGo').textContent = `もう一度押すと ${n} 件開きます`;
+    $('openGo').classList.add('armed');
+    openArmed = setTimeout(disarmOpen, 4000);
+    return;
+  }
+  disarmOpen();
+  const r = await chrome.runtime.sendMessage({ type: 'openList', text }).catch(() => null);
+  showOpenResult(r);
+  if (r && !r.busy && !r.error) { $('openText').value = ''; renderOpenCount(); }
+});
 
 confirmTwice($('clear'), () => chrome.storage.local.set({ log: [] }));
 confirmTwice($('clearDone'), () => chrome.runtime.sendMessage({ type: 'clearDone' }).then(refreshStatus).catch(() => {}));

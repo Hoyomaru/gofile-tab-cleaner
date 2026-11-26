@@ -35,7 +35,7 @@ globalThis.gofile = (() => {
   }
 
   // ---- 貼り付けた文や拾ったリンクから Gofile の URL を取り出す ----
-  // 文中の https://gofile.io/d/<id>（#file=<ファイルID> 付きも）と、行全体が ID だけの行を受け付ける。
+  // 文中の https://gofile.io/d/<id>（#file=<ファイルID> 付きも）と、行全体が ID だけ（5 文字以上。gofile-jd2 と同じ）の行を受け付ける。
   // クエリは捨て、#file= だけ残す。同じ URL は 1 つにまとめる。
   // 戻り値: { urls, skipped }。skipped = 空行以外で URL を 1 つも読み取れなかった行の数
   const URL_RE = /https?:\/\/(?:www\.)?gofile\.io\/d\/([A-Za-z0-9]+)(?:[/?][^\s#]*)?(#file=[A-Za-z0-9-]+)?/g;
@@ -46,7 +46,7 @@ globalThis.gofile = (() => {
       const line = raw.trim();
       if (!line) continue;
       const found = [];
-      if (/^[A-Za-z0-9]+$/.test(line)) found.push(`https://gofile.io/d/${line}`);
+      if (/^[A-Za-z0-9]{5,}$/.test(line)) found.push(`https://gofile.io/d/${line}`);
       else for (const m of line.matchAll(URL_RE)) found.push(`https://gofile.io/d/${m[1]}${m[2] || ''}`);
       if (!found.length) skipped++;
       for (const u of found) if (!urls.includes(u)) urls.push(u);

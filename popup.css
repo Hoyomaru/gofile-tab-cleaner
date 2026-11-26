@@ -197,6 +197,16 @@ body:has(.retry-again:not([hidden])) #log { max-height: 184px; }
   padding: 4px 6px; min-height: 28px; cursor: pointer;
 }
 
+/* URL をまとめて開く */
+.open-body { padding: 10px 12px 12px; }
+.textarea {
+  display: block; width: 100%; resize: vertical; min-height: 64px; max-height: 200px;
+  font: var(--fs-s)/1.45 var(--mono); color: var(--text);
+  background: var(--soft); border: 1px solid var(--border); border-radius: var(--r-s); padding: 6px 8px;
+}
+.open-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.open-count { font-size: var(--fs-s); color: var(--muted); }
+
 /* 履歴 */
 .history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .actions { display: flex; gap: 2px; }
