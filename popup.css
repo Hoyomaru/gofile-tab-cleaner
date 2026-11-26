@@ -156,6 +156,7 @@ h2 { font-size: var(--fs-m); font-weight: 600; margin: 0; }
 .retry-again { margin-top: 8px; }
 /* ボタンが出ている間は、その分だけ履歴を短くしてポップアップの高さを 600px 以内に保つ */
 body:has(.retry-again:not([hidden])) #log { max-height: 184px; }
+body:has(#retryGaveUp:not([hidden])):has(#gotoPassword:not([hidden])) #log { max-height: 140px; }
 
 /* 自動処理（たたんで1行に） */
 .auto { border: 1px solid var(--border); border-radius: var(--r-l); margin-bottom: 14px; }

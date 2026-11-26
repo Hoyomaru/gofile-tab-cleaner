@@ -43,6 +43,12 @@ async function refreshStatus() {
   const again = $('retryGaveUp');
   again.hidden = !st.gaveUp;
   again.textContent = `再試行を中止した ${st.gaveUp} タブをもう一度試す`;
+  passwordTabs = st.passwordTabs || [];
+  const pw = $('gotoPassword');
+  pw.hidden = !passwordTabs.length;
+  pw.textContent = passwordTabs.length > 1
+    ? `パスワード待ちの ${passwordTabs.length} タブへ順に移る`
+    : 'パスワード待ちのタブへ移る';
   showProgress(st.scan);
   showReopen(st.reopen ?? null);
 }
@@ -219,7 +225,7 @@ async function init() {
 
   // 自動クローズや整理で履歴が変わった時、再試行の状況が変わった時に表示を更新
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'session' && changes.retry) { refreshStatus(); return; }
+    if (area === 'session' && (changes.retry || changes.password)) { refreshStatus(); return; }
     if (area !== 'local') return;
     if (changes.log) { setLog(changes.log.newValue || []); renderLog(); refreshStatus(); }
     if (changes.lastScan) showResult(changes.lastScan.newValue);
@@ -269,6 +275,15 @@ $('retryGaveUp').addEventListener('click', async () => {
 });
 
 $('reopenAll').addEventListener('click', () => reopen(visibleEntries(), false));
+
+// パスワード待ちのタブへ移る。押すたびに次のタブへ（ポップアップは開いたまま）
+let passwordTabs = [];
+let passwordIndex = 0;
+$('gotoPassword').addEventListener('click', () => {
+  if (!passwordTabs.length) return;
+  const tabId = passwordTabs[passwordIndex++ % passwordTabs.length];
+  chrome.runtime.sendMessage({ type: 'focusTab', tabId }).catch(() => {});
+});
 
 // ---- URL をまとめて開く ----
 // OPEN_CONFIRM 件を超える時は、2 回押して確定する（1 回目で件数を見せる）

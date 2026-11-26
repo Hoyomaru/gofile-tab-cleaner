@@ -210,6 +210,17 @@ async function forgetRetry(tabId) {
   await chrome.storage.session.set({ retry });
 }
 
+// ---- パスワード待ち（content.js からの報告）----
+// storage.session の password に { tabId: contentId } で覚える。入力して中身が出た・別の ID へ移った・
+// タブを閉じたら消す。
+async function setPassword(tabId, contentId) {
+  const { password = {} } = await chrome.storage.session.get('password');
+  if (contentId) password[tabId] = contentId;
+  else if (tabId in password) delete password[tabId];
+  else return;
+  await chrome.storage.session.set({ password });
+}
+
 // ---- 履歴から開き直す ----
 // 同じ contentId のタブが既に開いていれば新しく開かずそこを使う。
 // まとめて開く時は REOPEN_GAP ずつ間隔をあけて、Too many requests を起こしにくくする。
@@ -489,6 +500,9 @@ async function getStatus() {
   // 再試行の記録は、今も開いている Gofile タブの分だけ数える
   const { retry = {} } = await chrome.storage.session.get('retry');
   const inRetry = tabs.filter((t) => retry[t.id]);
+  // パスワード待ちも、今も同じコンテンツを開いているタブの分だけ数える
+  const { password = {} } = await chrome.storage.session.get('password');
+  const passwordTabs = tabs.filter((t) => password[t.id] && password[t.id] === contentIdFromUrl(tabUrl(t))).map((t) => t.id);
   return {
     total: tabs.length,
     duplicates,
@@ -496,6 +510,8 @@ async function getStatus() {
     // 休止したタブは待機の時計も止まっているので、再試行待ちには数えない
     retrying: inRetry.filter((t) => !retry[t.id].gaveUp && !sleeping(t)).length,
     gaveUp: inRetry.filter((t) => retry[t.id].gaveUp).length,
+    password: passwordTabs.length,
+    passwordTabs,
     doneCount: Object.keys((await chrome.storage.local.get('done')).done || {}).length,
     scan: scanState,
     reopen: reopenState,
@@ -526,6 +542,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.type === 'clearDone') {
     withLog(() => chrome.storage.local.remove('done')).then(() => sendResponse({}));
+    return true;
+  }
+  if (msg?.type === 'password' && sender.tab && msg.contentId) {
+    enqueue(() => setPassword(sender.tab.id, msg.contentId));
+    return;
+  }
+  if (msg?.type === 'passwordDone' && sender.tab) {
+    enqueue(() => setPassword(sender.tab.id, null));
+    return;
+  }
+  if (msg?.type === 'focusTab' && Number.isInteger(msg.tabId)) {
+    chrome.tabs.update(msg.tabId, { active: true })
+      .then((t) => chrome.windows.update(t.windowId, { focused: true }))
+      .catch(() => {})
+      .finally(() => sendResponse({}));
     return true;
   }
   if (msg?.type === 'loaded' && sender.tab) {
@@ -588,6 +619,31 @@ const DEDUPE_DELAY = 200;
 const pendingDedupe = new Set();
 let dedupeTimer = null;
 
+// ---- アイコンのバッジ ----
+// 手を付けたほうがいいタブの数（閉じられる重複・再試行を中止・パスワード待ち）。0 なら出さない。
+// タブの変化は一度にたくさん届くので、BADGE_DELAY の間はまとめて 1 回だけ数える
+const BADGE_DELAY = 200;
+let badgeTimer = null;
+function updateBadgeSoon() {
+  clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(async () => {
+    const st = await getStatus().catch(() => null);
+    if (!st) return;
+    const n = st.duplicates + st.gaveUp + st.password;
+    await chrome.action.setBadgeText({ text: n ? String(n) : '' }).catch(() => {});
+  }, BADGE_DELAY);
+}
+chrome.action.setBadgeBackgroundColor({ color: '#8f5400' }).catch(() => {}); // ポップアップの注意の色（--warn）
+chrome.tabs.onCreated.addListener(updateBadgeSoon);
+chrome.tabs.onRemoved.addListener(updateBadgeSoon);
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.pinned !== undefined || changeInfo.status) updateBadgeSoon();
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'session' && (changes.retry || changes.password)) updateBadgeSoon();
+});
+updateBadgeSoon();
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (!changeInfo.url) return;
   const id = contentIdFromUrl(changeInfo.url);
@@ -607,5 +663,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   enqueue(() => forgetRetry(tabId));
+  enqueue(() => setPassword(tabId, null));
   enqueue(() => forgetAllowed(tabId));
 });
