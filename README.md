@@ -8,11 +8,16 @@ Gofile のコンテンツタブ（`https://gofile.io/d/<contentId>`）を整理�
 
 <img src="docs/popup.jpg" alt="ポップアップの画面" width="360">
 
+> [!IMPORTANT]
 > 非公式のツールです。Gofile（WOJTEK SAS）とは関係ありません。
+
+## 必要なもの
+
+- Chrome / Edge / Brave など Chromium 系のブラウザ
 
 ## インストール
 
-Chrome ウェブストアには公開していないので、手動で読み込みます（Chrome / Edge / Brave など Chromium 系ブラウザで動作）。
+Chrome ウェブストアには公開していないので、手動で読み込みます。
 
 1. [Releases](https://github.com/Hoyomaru/gofile-tab-cleaner/releases/latest) から `gofile-tab-cleaner-v<バージョン>.zip` をダウンロードして展開する
 2. Chrome で `chrome://extensions` を開く
