@@ -34,25 +34,50 @@ globalThis.gofile = (() => {
     return t;
   }
 
+  // ---- 貼り付けた文や拾ったリンクから Gofile の URL を取り出す ----
+  // 文中の https://gofile.io/d/<id>（#file=<ファイルID> 付きも）と、行全体が ID だけの行を受け付ける。
+  // クエリは捨て、#file= だけ残す。同じ URL は 1 つにまとめる。
+  // 戻り値: { urls, skipped }。skipped = 空行以外で URL を 1 つも読み取れなかった行の数
+  const URL_RE = /https?:\/\/(?:www\.)?gofile\.io\/d\/([A-Za-z0-9]+)(?:[/?][^\s#]*)?(#file=[A-Za-z0-9-]+)?/g;
+  function parseGofileList(text) {
+    const urls = [];
+    let skipped = 0;
+    for (const raw of String(text || '').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const found = [];
+      if (/^[A-Za-z0-9]+$/.test(line)) found.push(`https://gofile.io/d/${line}`);
+      else for (const m of line.matchAll(URL_RE)) found.push(`https://gofile.io/d/${m[1]}${m[2] || ''}`);
+      if (!found.length) skipped++;
+      for (const u of found) if (!urls.includes(u)) urls.push(u);
+    }
+    return { urls, skipped };
+  }
+
   // ---- ページの判定（ページ内で実行する）----
-  // 戻り値: 'notFound' | 'tooMany' | null
+  // 戻り値: 'notFound' | 'tooMany' | 'password' | null
   // - notFound: タイトルと見出しの両方が一致した時だけ（どちらか片方だけでは閉じない）
   // - tooMany: アクセス集中時の「Too many requests」だけが書かれたページ
+  // - password: パスワードの入力を待っている（gofile-jd2 と同じ目印）
   function probe() {
     if (/^too many requests\.?$/i.test((document.body?.innerText || '').trim())) return 'tooMany';
     const h1Ok = [...document.querySelectorAll('main h1')]
       .some((h) => h.textContent.trim() === 'This content does not exist');
-    return isNotFoundTitle(document.title) && h1Ok ? 'notFound' : null;
+    if (isNotFoundTitle(document.title) && h1Ok) return 'notFound';
+    return document.querySelector('form[data-fm="password"]') ? 'password' : null;
   }
 
-  return { contentIdFromUrl, isLoadingTitle, isNotFoundTitle, nameFromTitle, probe };
+  return { contentIdFromUrl, isLoadingTitle, isNotFoundTitle, nameFromTitle, parseGofileList, probe };
 })();
 
 // background.js と popup.js で共通の設定と決まりごと（Gofile とは関係ない部分）。
 // 既定値や回数を変える時はここだけを直す。
 globalThis.tabCleaner = (() => {
   // retentionDays: 「最近閉じたタブ」を残す日数。0 = 期限なし（件数上限のみ）
-  const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, retentionDays: 7 };
+  // autoDone: gofile-jd2 で JD2 へ送った（ダウンロード済みの）コンテンツのタブを閉じる
+  const DEFAULTS = { autoNotFound: true, autoDedupe: true, autoRetry: true, autoDone: true, retentionDays: 7 };
+  // 「ダウンロード済み」として覚えておく contentId の上限（期限なし。超えたら古いものから消す）
+  const DONE_MAX = 20_000;
   const DAY = 86_400_000;
   // Too many requests を再試行する最大回数（ポップアップの説明文もこの値から作る）
   const RETRY_MAX = 5;
@@ -61,5 +86,5 @@ globalThis.tabCleaner = (() => {
   const withinRetention = (log, days) =>
     days > 0 ? log.filter((e) => e.at >= Date.now() - days * DAY) : log;
 
-  return { DEFAULTS, RETRY_MAX, withinRetention };
+  return { DEFAULTS, DONE_MAX, RETRY_MAX, withinRetention };
 })();
