@@ -296,6 +296,54 @@ async function openList(text) {
   return { opened: toOpen.length, skipped, unreadable };
 }
 
+// ---- 右クリックメニュー「Gofile のリンクをまとめて開く」----
+// リンクの上ならそのリンク 1 つ。それ以外は、選択範囲があればその中のリンクと文字、なければページ全体のリンクを拾う。
+// ページの中を読むのは右クリックした時だけ（activeTab）。読めないページ（chrome:// など）では選択した文字だけを使う。
+const MENU_ID = 'openGofileLinks';
+
+// ページの中で動く。選択範囲（なければページ全体）のリンク先と、選択した文字を 1 行ずつ返す
+function collectLinks() {
+  const sel = getSelection();
+  const lines = [];
+  if (sel && sel.rangeCount && !sel.isCollapsed) {
+    for (let i = 0; i < sel.rangeCount; i++) {
+      for (const a of sel.getRangeAt(i).cloneContents().querySelectorAll('a[href]')) lines.push(a.href);
+    }
+    // 範囲の中に部分的に入ったリンク（リンクの文字の途中から選んだ時）
+    for (let i = 0; i < sel.rangeCount; i++) {
+      const node = sel.getRangeAt(i).commonAncestorContainer;
+      const a = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest('a[href]');
+      if (a) lines.push(a.href);
+    }
+    lines.push(sel.toString());
+  } else {
+    for (const a of document.querySelectorAll('a[href]')) lines.push(a.href);
+  }
+  return lines.join('\n');
+}
+
+// 前の開き直しが終わるのを待ってから開く（右クリックには結果を返す先がないので、断らずに待つ）
+async function openListWhenFree(text) {
+  for (let waited = 0; reopenState && waited < 30 * 60_000; waited += 1000) await sleep(1000);
+  return openList(text);
+}
+
+async function handleMenuClick(info, tab) {
+  if (info.menuItemId !== MENU_ID) return;
+  let text = info.linkUrl || '';
+  if (!text && tab?.id != null) {
+    const res = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [info.frameId ?? 0] }, func: collectLinks })
+      .catch(() => null);
+    text = res?.[0]?.result || '';
+  }
+  if (!text) text = info.selectionText || '';
+  if (!text) return;
+  return openListWhenFree(text);
+}
+self.handleMenuClick = handleMenuClick; // 確認用（service worker から直接呼べるように）
+
+chrome.contextMenus.onClicked.addListener((info, tab) => { handleMenuClick(info, tab).catch((e) => console.warn(e)); });
+
 // ---- 再試行を中止したタブをもう一度試す（ポップアップのボタン）----
 // 中止の印を消して回数を数え直し、REOPEN_GAP ずつ間隔をあけて再読み込みする。
 // 読み込んだ後は、また Too many requests なら content.js が 1 回目から再試行を問い合わせる。
@@ -519,7 +567,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // 期限切れ履歴の削除：1時間ごと、ブラウザ起動時、保存期間を変えた時
 const PRUNE_ALARM = 'pruneLog';
 const ensureAlarm = () => chrome.alarms.create(PRUNE_ALARM, { periodInMinutes: 60 });
-chrome.runtime.onInstalled.addListener(() => { ensureAlarm(); enqueue(pruneLog); });
+chrome.runtime.onInstalled.addListener(() => {
+  ensureAlarm();
+  enqueue(pruneLog);
+  chrome.contextMenus.create({
+    id: MENU_ID,
+    title: 'Gofile のリンクをまとめて開く',
+    contexts: ['page', 'selection', 'link'],
+  }, () => void chrome.runtime.lastError); // 更新時に既にある時のエラーは無視
+});
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); enqueue(pruneLog); });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === PRUNE_ALARM) enqueue(pruneLog); });
 chrome.storage.onChanged.addListener((changes, area) => {
