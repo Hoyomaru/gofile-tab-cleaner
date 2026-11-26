@@ -2,10 +2,10 @@ import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意�
 
 const { contentIdFromUrl, nameFromTitle } = globalThis.gofile;
 const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
-const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry'];
-const REASON = { notFound: '不存在', duplicate: '重複' };
-// 理由ごとの札の色（共通の状態色。不存在は注意、重複は目立たせない）
-const REASON_TONE = { notFound: 'warn', duplicate: '' };
+const SWITCHES = ['autoNotFound', 'autoDedupe', 'autoRetry', 'autoDone'];
+const REASON = { notFound: '不存在', duplicate: '重複', done: '済み' };
+// 理由ごとの札の色（共通の状態色。不存在は注意、重複・済みは目立たせない）
+const REASON_TONE = { notFound: 'warn', duplicate: '', done: '' };
 const REOPEN_ICON =
   '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v3h-3"/></svg>';
 const $ = (id) => document.getElementById(id);
@@ -38,6 +38,8 @@ async function refreshStatus() {
   $('statSleep').textContent = st.sleeping;
   $('statDup').parentElement.classList.toggle('warn', st.duplicates > 0);
   $('statRetry').textContent = st.retrying;
+  $('doneDesc').textContent = `${st.doneCount} 件。消すと、前に送ったものも閉じなくなります`;
+  $('clearDone').disabled = !st.doneCount;
   const again = $('retryGaveUp');
   again.hidden = !st.gaveUp;
   again.textContent = `再試行を中止した ${st.gaveUp} タブをもう一度試す`;
@@ -73,7 +75,8 @@ function showResult(r) {
     $('result').textContent = `前回の整理（${relTime(r.at)}）は途中で失敗しました（${r.error}）。拡張機能を再読み込みしてから、もう一度試してください。`;
     return;
   }
-  let text = `前回の整理（${relTime(r.at)}）：重複 ${r.duplicates} 件・不存在 ${r.notFound} 件を閉じました`;
+  let text = `前回の整理（${relTime(r.at)}）：重複 ${r.duplicates} 件・不存在 ${r.notFound} 件` +
+    `${r.done ? `・済み ${r.done} 件` : ''}を閉じました`;
   if (r.unchecked) text += `。確認できなかった ${r.unchecked} 件はそのままです`;
   $('result').textContent = text;
 }
@@ -83,11 +86,12 @@ function showResult(r) {
 const displayName = (e) => nameFromTitle(e.title);
 
 function renderLog() {
-  const counts = { all: log.length, notFound: 0, duplicate: 0 };
+  const counts = { all: log.length, notFound: 0, duplicate: 0, done: 0 };
   for (const e of log) counts[e.reason] = (counts[e.reason] || 0) + 1;
   $('cntAll').textContent = counts.all;
   $('cntNotFound').textContent = counts.notFound;
   $('cntDuplicate').textContent = counts.duplicate;
+  $('cntDone').textContent = counts.done;
 
   const items = visibleEntries();
   $('clear').disabled = !log.length;
@@ -155,7 +159,7 @@ const reopen = (entries, focus) =>
   chrome.runtime.sendMessage({ type: 'reopen', entries, focus }).catch(() => {});
 
 // ---- 自動処理の1行まとめ（たたんだ時に見える） ----
-const SWITCH_LABELS = { autoNotFound: '不存在', autoDedupe: '重複', autoRetry: '再試行' };
+const SWITCH_LABELS = { autoNotFound: '不存在', autoDedupe: '重複', autoRetry: '再試行', autoDone: '済み' };
 function renderAutoSummary() {
   const on = SWITCHES.filter((k) => $(k).checked).map((k) => SWITCH_LABELS[k]);
   const days = retentionDays > 0 ? `履歴 ${retentionDays}日` : '履歴 無期限';
@@ -218,6 +222,7 @@ async function init() {
     if (area !== 'local') return;
     if (changes.log) { setLog(changes.log.newValue || []); renderLog(); refreshStatus(); }
     if (changes.lastScan) showResult(changes.lastScan.newValue);
+    if (changes.done) refreshStatus();
   });
 
   chrome.runtime.onMessage.addListener((msg) => {
@@ -265,5 +270,6 @@ $('retryGaveUp').addEventListener('click', async () => {
 $('reopenAll').addEventListener('click', () => reopen(visibleEntries(), false));
 
 confirmTwice($('clear'), () => chrome.storage.local.set({ log: [] }));
+confirmTwice($('clearDone'), () => chrome.runtime.sendMessage({ type: 'clearDone' }).then(refreshStatus).catch(() => {}));
 
 init();

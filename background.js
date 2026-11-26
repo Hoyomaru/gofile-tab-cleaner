@@ -1,7 +1,7 @@
 import './common.js'; // globalThis.gofile と globalThis.tabCleaner を用意する
 
 const { contentIdFromUrl, isLoadingTitle, isNotFoundTitle } = globalThis.gofile;
-const { DEFAULTS, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
+const { DEFAULTS, DONE_MAX, RETRY_MAX, withinRetention } = globalThis.tabCleaner;
 
 // 一括整理で数百タブを閉じても取り消せるよう多めに残す（古いものは保存期間で消える）
 const LOG_MAX = 500;
@@ -38,7 +38,7 @@ const pruneLog = () => withLog(async () => {
   if (kept.length !== log.length) await chrome.storage.local.set({ log: kept });
 });
 
-// 手動整理の間にこの拡張機能が閉じたタブと、その理由（'notFound' | 'duplicate'）。
+// 手動整理の間にこの拡張機能が閉じたタブと、その理由（'notFound' | 'duplicate' | 'done'）。
 // 整理中のタブを自動処理（content.js からの不存在報告や自動の重複整理）が先に閉じた時に、
 // checkTab が「確認できなかった」ではなく本当の理由で数えるために使う。
 const closedDuringScan = new Map();
@@ -104,6 +104,62 @@ async function switchToKept(keep, activeDup) {
   if (focused?.id !== activeDup.windowId) return; // 後ろのウィンドウ：閉じるだけ（Chrome が隣のタブを選ぶ）
   await chrome.tabs.update(keep.id, { active: true }).catch(() => {});
   await chrome.windows.update(keep.windowId, { focused: true }).catch(() => {});
+}
+
+// ---- ダウンロード済み（gofile-jd2 で JD2 へ送ったコンテンツ）----
+// storage.local の done に { contentId: 送った時刻 } で覚える。期限なし、DONE_MAX を超えたら古いものから消す。
+// #file= 付き（フォルダの一部のファイルだけ送った）は覚えない。フォルダ全体を済みにすると、
+// 残りのファイルを取りに戻れなくなるため。
+const markDone = (urls, senderTabId) => withLog(async () => {
+  const ids = urls.filter((u) => !/#file=/i.test(u)).map(contentIdFromUrl).filter(Boolean);
+  if (!ids.length) return;
+  // 送ったタブ自身は閉じない（そのまま残りの操作を続けられるように）
+  // （送ってすぐ閉じたタブは覚えない）
+  if (senderTabId != null && await chrome.tabs.get(senderTabId).catch(() => null)) await allowDone(senderTabId);
+  const { done = {} } = await chrome.storage.local.get('done');
+  const now = Date.now();
+  for (const id of ids) done[id] = now;
+  let entries = Object.entries(done);
+  if (entries.length > DONE_MAX) {
+    entries = entries.sort((a, b) => b[1] - a[1]).slice(0, DONE_MAX);
+  }
+  await chrome.storage.local.set({ done: Object.fromEntries(entries) });
+});
+
+// 済みでも閉じないタブ（履歴から開き直したタブ・送ったタブ）。そのタブが開いている間だけ有効。
+// service worker が止まっても残るよう storage.session にも置き、すぐ効くようメモリにも持つ
+const allowedTabs = new Set();
+let allowedLoaded = false;
+async function loadAllowed() {
+  if (allowedLoaded) return;
+  const { allowDone = [] } = await chrome.storage.session.get('allowDone');
+  for (const id of allowDone) allowedTabs.add(id);
+  allowedLoaded = true;
+}
+async function allowDone(tabId) {
+  await loadAllowed();
+  allowedTabs.add(tabId);
+  await chrome.storage.session.set({ allowDone: [...allowedTabs] });
+}
+async function forgetAllowed(tabId) {
+  await loadAllowed();
+  if (!allowedTabs.delete(tabId)) return;
+  await chrome.storage.session.set({ allowDone: [...allowedTabs] });
+}
+
+// 済みのコンテンツのタブを閉じる。URL だけで判断するので、未読み込み・休止中のタブも閉じる。
+// onlyIds（Set）を渡すとその contentId だけ。ピン留めは閉じない。
+async function closeDone(onlyIds = null) {
+  const { done = {} } = await chrome.storage.local.get('done');
+  await loadAllowed();
+  let closed = 0;
+  for (const t of await chrome.tabs.query({})) {
+    const id = contentIdFromUrl(tabUrl(t));
+    if (!id || !(id in done) || (onlyIds && !onlyIds.has(id))) continue;
+    if (t.pinned || allowedTabs.has(t.id)) continue;
+    if (await closeTab(t, 'done')) closed++;
+  }
+  return closed;
 }
 
 // ---- 不存在タブ（content.js からの報告）----
@@ -184,13 +240,15 @@ async function reopen(entries, focus) {
     const key = id || e.url;
     const existing = id && openIds.get(id);
     if (existing) {
+      await allowDone(existing.id);
       if (focus) {
         await chrome.tabs.update(existing.id, { active: true }).catch(() => {});
         await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
       }
     } else if (!done.has(key)) {
       if (opened++ > 0) await sleep(REOPEN_GAP);
-      await chrome.tabs.create({ url: e.url, active: focus });
+      const tab = await chrome.tabs.create({ url: e.url, active: focus });
+      await allowDone(tab.id);
     }
     done.add(key);
     // 開き直した分は履歴から外す（途中で止まっても、開いた分だけ消える）
@@ -247,7 +305,7 @@ const runProbe = async (tabId) => {
   return res?.result ?? null;
 };
 
-// 1タブを確認する。戻り値: 'notFound' | 'duplicate' | 'exists' | 'unchecked'
+// 1タブを確認する。戻り値: 'notFound' | 'duplicate' | 'done' | 'exists' | 'unchecked'
 async function checkTab(tab) {
   const id = contentIdFromUrl(tab.url);
   const wasSleeping = tab.discarded || tab.status === 'unloaded';
@@ -303,11 +361,13 @@ async function scanAll() {
     // 重複整理だけは自動の重複整理と同時に動かないよう queue に並べる。
     // 各タブの確認は時間がかかるので queue の外で行い、その間も自動処理（再試行・不存在・重複）を止めない
     const duplicates = (await enqueue(() => dedupe())) ?? 0; // enqueue は失敗時に undefined を返す
+    // ダウンロード済みは自動処理のスイッチに関係なく閉じる（手動の整理は全部の判定を使う）
+    const doneClosed = (await enqueue(() => closeDone())) ?? 0;
     const tabs = (await chrome.tabs.query({})).filter((t) => contentIdFromUrl(t.url) && !t.pinned);
     scanState.total = tabs.length;
     reportProgress();
     // duplicate: 確認中に自動の重複整理が閉じたタブ
-    const counts = { notFound: 0, duplicate: 0, exists: 0, unchecked: 0 };
+    const counts = { notFound: 0, duplicate: 0, done: 0, exists: 0, unchecked: 0 };
     let i = 0;
     const worker = async () => {
       while (i < tabs.length) {
@@ -320,6 +380,7 @@ async function scanAll() {
     const result = {
       duplicates: duplicates + counts.duplicate,
       notFound: counts.notFound,
+      done: doneClosed + counts.done,
       unchecked: counts.unchecked,
       at: Date.now(),
     };
@@ -349,6 +410,7 @@ async function getStatus() {
     // 休止したタブは待機の時計も止まっているので、再試行待ちには数えない
     retrying: inRetry.filter((t) => !retry[t.id].gaveUp && !sleeping(t)).length,
     gaveUp: inRetry.filter((t) => retry[t.id].gaveUp).length,
+    doneCount: Object.keys((await chrome.storage.local.get('done')).done || {}).length,
     scan: scanState,
     reopen: reopenState,
   };
@@ -371,6 +433,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }).catch((e) => console.warn(e));
     sendResponse({ started: true });
     return;
+  }
+  if (msg?.type === 'sent' && Array.isArray(msg.urls)) {
+    markDone(msg.urls.filter((u) => typeof u === 'string'), sender.tab?.id);
+    return;
+  }
+  if (msg?.type === 'clearDone') {
+    withLog(() => chrome.storage.local.remove('done')).then(() => sendResponse({}));
+    return true;
   }
   if (msg?.type === 'loaded' && sender.tab) {
     enqueue(() => forgetRetry(sender.tab.id));
@@ -430,10 +500,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const ids = new Set(pendingDedupe);
     pendingDedupe.clear();
     enqueue(async () => {
-      const { autoDedupe } = await getSettings();
+      const { autoDedupe, autoDone } = await getSettings();
       if (autoDedupe) await dedupe(ids);
+      if (autoDone) await closeDone(ids);
     });
   }, DEDUPE_DELAY);
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => enqueue(() => forgetRetry(tabId)));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  enqueue(() => forgetRetry(tabId));
+  enqueue(() => forgetAllowed(tabId));
+});

@@ -59,6 +59,20 @@
       </label>
       <label class="row">
         <span class="text">
+          <span class="title">ダウンロード済みのタブを閉じる</span>
+          <span class="desc">gofile-jd2 で JD2 へ送ったコンテンツを、また開いたら閉じます</span>
+        </span>
+        <input type="checkbox" class="switch" role="switch" id="autoDone">
+      </label>
+      <div class="row static">
+        <span class="text">
+          <span class="title">ダウンロード済みの記録</span>
+          <span class="desc" id="doneDesc">–</span>
+        </span>
+        <button id="clearDone" class="btn ghost danger-text" data-confirm="もう一度押すと消します">記録を消す</button>
+      </div>
+      <label class="row">
+        <span class="text">
           <span class="title">履歴の保存期間</span>
           <span class="desc">過ぎた「最近閉じたタブ」は自動で消えます</span>
         </span>
@@ -85,6 +99,7 @@
       <button class="chip active" data-filter="all" aria-pressed="true">すべて <span class="n" id="cntAll"></span></button>
       <button class="chip" data-filter="notFound" aria-pressed="false">不存在 <span class="n" id="cntNotFound"></span></button>
       <button class="chip" data-filter="duplicate" aria-pressed="false">重複 <span class="n" id="cntDuplicate"></span></button>
+      <button class="chip" data-filter="done" aria-pressed="false">済み <span class="n" id="cntDone"></span></button>
     </div>
     <ul id="log"></ul>
   </section>

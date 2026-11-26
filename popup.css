@@ -173,6 +173,7 @@ body:has(.retry-again:not([hidden])) #log { max-height: 184px; }
 
 .row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; cursor: pointer; }
 .row + .row { border-top: 1px solid var(--border); }
+.row.static { cursor: default; }
 .text { flex: 1; display: flex; flex-direction: column; }
 .title { font-weight: 500; }
 .desc { font-size: var(--fs-xs); color: var(--muted); }
