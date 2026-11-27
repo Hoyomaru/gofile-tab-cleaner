@@ -35,12 +35,13 @@ globalThis.gofile = (() => {
   }
 
   // ---- 貼り付けた文や拾ったリンクから Gofile の URL を取り出す ----
-  // 文中の https://gofile.io/d/<id>（#file=<ファイルID> 付きも）と、行全体が ID だけの行を受け付ける。
+  // 文中の https://gofile.io/d/<id>（#file=<ファイルID> 付きも。https:// を省いた gofile.io/d/<id> も）と、
+  // 行全体が ID だけの行を受け付ける。https:// がない時は、前が文字・点・スラッシュでないものだけ（notgofile.io を拾わない）。
   // ID だけの行は 5 文字以上で数字を含むものに限る（「Download」「Mirror」のような単語を ID と取り違えないため）。
   // bareIds: false なら ID だけの行は受け付けない（右クリックで拾った文章など、利用者が並べた一覧でない時）。
   // クエリは捨て、#file= だけ残す。同じ URL は 1 つにまとめる。
   // 戻り値: { urls, skipped }。skipped = 空行以外で URL を 1 つも読み取れなかった行の数
-  const URL_RE = /https?:\/\/(?:www\.)?gofile\.io\/d\/([A-Za-z0-9]+)(?:[/?][^\s#]*)?(#file=[A-Za-z0-9-]+)?/g;
+  const URL_RE = /(?:https?:\/\/|(?<![\w./-]))(?:www\.)?gofile\.io\/d\/([A-Za-z0-9]+)(?:[/?][^\s#]*)?(#file=[A-Za-z0-9-]+)?/g;
   function parseGofileList(text, { bareIds = true } = {}) {
     const urls = [];
     let skipped = 0;

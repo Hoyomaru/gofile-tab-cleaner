@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gofile Tab Cleaner",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "minimum_chrome_version": "102",
   "description": "Gofile の /d/<contentId> タブについて、不存在・重複・ダウンロード済み（gofile-jd2 で送ったもの）のタブを閉じます。Too many requests のタブは時間をおいて再読み込みし、URL の一覧は少しずつまとめて開きます。",
   "permissions": ["storage", "scripting", "alarms", "contextMenus", "activeTab"],

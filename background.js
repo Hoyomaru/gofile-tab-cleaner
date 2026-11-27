@@ -147,8 +147,29 @@ async function forgetAllowed(tabId) {
   await chrome.storage.session.set({ allowDone: [...allowedTabs] });
 }
 
-// 済みのコンテンツのタブを閉じる。URL だけで判断するので、未読み込み・休止中のタブも閉じる。
-// onlyIds（Set）を渡すとその contentId だけ。ピン留めは閉じない。
+// 履歴をたどって開いたタブか（戻る・進む、「閉じたタブを開く」(Ctrl+Shift+T)、ブラウザ起動時の復元）。
+// どれも利用者がわざと開き直したものなので、済みでも閉じない。
+// - まだ読み込んでいない・休止中のタブ: 起動時に復元したまま開いていないタブか、前から開いていたタブ。閉じない
+// - 読み込み中で行き先がまだ決まっていない: 新しく開いたものとして扱う
+// - 読めない時（ページを読む権限がないなど）: 新しく開いたものとして扱う
+async function openedFromHistory(tab) {
+  if (tab.status === 'unloaded' || tab.discarded) return true;
+  if (tab.pendingUrl) return false;
+  const res = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    injectImmediately: true,
+    func: () => {
+      // Navigation API（Chrome 123 以降）は、戻るでキャッシュから出したページも数える
+      const a = globalThis.navigation?.activation?.navigationType;
+      if (a) return a === 'traverse';
+      return performance.getEntriesByType('navigation')[0]?.type === 'back_forward';
+    },
+  }).catch(() => null);
+  return res?.[0]?.result === true;
+}
+
+// 済みのコンテンツのタブを閉じる。ピン留め・残すタブ・履歴をたどって開いたタブは閉じない。
+// onlyIds（Set）を渡すとその contentId だけ。
 async function closeDone(onlyIds = null) {
   const { done = {} } = await chrome.storage.local.get('done');
   await loadAllowed();
@@ -157,6 +178,10 @@ async function closeDone(onlyIds = null) {
     const id = contentIdFromUrl(tabUrl(t));
     if (!id || !(id in done) || (onlyIds && !onlyIds.has(id))) continue;
     if (t.pinned || allowedTabs.has(t.id)) continue;
+    if (await openedFromHistory(t)) {
+      await allowDone(t.id); // このタブを開いている間は、もう聞かない
+      continue;
+    }
     if (await closeTab(t, 'done')) closed++;
   }
   return closed;
@@ -335,10 +360,21 @@ function collectLinks() {
 }
 
 // 前の開き直しが終わるのを待ってから開く（右クリックには結果を返す先がないので、断らずに待つ）
+// 続けて何回か頼まれた時に、空いた瞬間に取り合って後の分が断られないよう、頼まれた順に 1 本の列に並べる。
 // 拾うのは文章なので、ID だけの行は受け付けない（「Mirror1」のような語を開かないように）
-async function openListWhenFree(text) {
-  for (let waited = 0; reopenState && waited < 30 * 60_000; waited += 1000) await sleep(1000);
-  return openList(text, { bareIds: false });
+const MENU_WAIT_MAX = 30 * 60_000;
+let menuChain = Promise.resolve();
+function openListWhenFree(text) {
+  const run = async () => {
+    for (const end = Date.now() + MENU_WAIT_MAX; Date.now() < end; await sleep(1000)) {
+      if (reopenState) continue;
+      const r = await openList(text, { bareIds: false });
+      if (!r.busy) return r; // 履歴の「すべて開く」などが先に始まっていたら、また待つ
+    }
+  };
+  const next = menuChain.then(run, run);
+  menuChain = next.catch(() => {});
+  return next;
 }
 
 async function handleMenuClick(info, tab) {
@@ -603,11 +639,17 @@ const ensureAlarm = () => chrome.alarms.create(PRUNE_ALARM, { periodInMinutes: 6
 chrome.runtime.onInstalled.addListener(() => {
   ensureAlarm();
   enqueue(pruneLog);
-  chrome.contextMenus.create({
-    id: MENU_ID,
-    title: 'Gofile のリンクをまとめて開く',
-    contexts: ['page', 'selection', 'link'],
-  }, () => void chrome.runtime.lastError); // 更新時に既にある時のエラーは無視
+  // 更新した時は前の版のメニューが残っているので、作り直して設定を入れ替える
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: MENU_ID,
+      title: 'Gofile のリンクをまとめて開く',
+      contexts: ['page', 'selection', 'link'],
+      // リンクの上で右クリックした時は、Gofile のリンクの時だけ出す（ほかのリンクでは開くものがない）。
+      // 何もないところや選択範囲では、この指定は効かずに出る（*.gofile.io は gofile.io も含む）
+      targetUrlPatterns: ['*://*.gofile.io/d/*'],
+    }, () => void chrome.runtime.lastError);
+  });
 });
 chrome.runtime.onStartup.addListener(() => { ensureAlarm(); enqueue(pruneLog); });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === PRUNE_ALARM) enqueue(pruneLog); });
