@@ -64,6 +64,9 @@
       // パスワードを入れて中身が出た、または別のページへ移った
       passwordFor = null;
       chrome.runtime.sendMessage({ type: 'passwordDone' }).catch(() => {});
+      // 待っている間は止めていた監視の時間切れを、ここから掛け直す
+      clearTimeout(limit);
+      limit = setTimeout(stop, WATCH_LIMIT);
     }
     if (!id) return;
     if (found === 'password' && passwordFor !== id) {

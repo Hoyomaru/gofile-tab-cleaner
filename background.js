@@ -273,9 +273,10 @@ async function reopen(entries, focus) {
 // 飛ばすもの: すでに開いている（一覧の中で同じ contentId が 2 回目以降のものも含む）・履歴で不存在・済み。
 // 開くのは履歴の「すべて開く」と同じ列で、同じ間隔をあけて後ろで開く。開き始める前に件数を返す。
 // 戻り値: { busy: true } | { opened, skipped: { open, notFound, done }, unreadable }
-async function openList(text) {
+// bareIds: ID だけの行も受け付けるか（common.js の parseGofileList を参照）
+async function openList(text, { bareIds = true } = {}) {
   if (reopenState) return { busy: true };
-  const { urls, skipped: unreadable } = parseGofileList(text);
+  const { urls, skipped: unreadable } = parseGofileList(text, { bareIds });
   const [{ log = [], done = {} }, tabs] = await Promise.all([
     chrome.storage.local.get(['log', 'done']),
     chrome.tabs.query({}),
@@ -334,9 +335,10 @@ function collectLinks() {
 }
 
 // 前の開き直しが終わるのを待ってから開く（右クリックには結果を返す先がないので、断らずに待つ）
+// 拾うのは文章なので、ID だけの行は受け付けない（「Mirror1」のような語を開かないように）
 async function openListWhenFree(text) {
   for (let waited = 0; reopenState && waited < 30 * 60_000; waited += 1000) await sleep(1000);
-  return openList(text);
+  return openList(text, { bareIds: false });
 }
 
 async function handleMenuClick(info, tab) {
@@ -637,6 +639,8 @@ chrome.action.setBadgeBackgroundColor({ color: '#8f5400' }).catch(() => {}); // 
 chrome.tabs.onCreated.addListener(updateBadgeSoon);
 chrome.tabs.onRemoved.addListener(updateBadgeSoon);
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  // ページを読み込み直したら、パスワード待ちの記録は消す（まだ待っていれば content.js がもう一度知らせる）
+  if (changeInfo.status === 'loading') enqueue(() => setPassword(tabId, null));
   if (changeInfo.url || changeInfo.pinned !== undefined || changeInfo.status) updateBadgeSoon();
 });
 chrome.storage.onChanged.addListener((changes, area) => {
